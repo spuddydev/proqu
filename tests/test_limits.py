@@ -289,3 +289,16 @@ def test_job_that_starts_just_after_the_scope_wait_is_not_run_twice(home, monkey
     assert done.state == "failed"
     assert done.reason.startswith("could not start: its cgroup was too slow")
     assert counter.read_text() == "x\n"
+
+
+def test_kernel_alone_kills_a_job_over_its_ram(cgroups, monkeypatch):
+    # with the supervisor's own RAM check off, only the cgroup can stop the job
+    monkeypatch.setattr(limits.Monitor, "check_ram", lambda self: None)
+    monkeypatch.setattr(limits.CgroupMonitor, "check_ram", lambda self: None)
+    job = starting_job([sys.executable, "-c", GROW], ram=200 * M)
+    started = time.monotonic()
+    runner.supervise(job.id)
+    done = ended(job)
+    assert done.state == "killed"
+    assert done.reason.startswith("used more than its RAM limit of 200.0M")
+    assert time.monotonic() - started < 20
