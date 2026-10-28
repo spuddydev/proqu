@@ -10,7 +10,9 @@ so a new session never hears about an old one's jobs.
 import contextlib
 import hashlib
 import os
+import signal
 import sqlite3
+import sys
 import time
 from pathlib import Path
 
@@ -32,14 +34,29 @@ def _key(session: str) -> str:
     return hashlib.sha256(session.encode()).hexdigest()[:32]
 
 
+def _claude_ticks(claude_pid: str) -> int | None:
+    return procs.start_ticks(int(claude_pid)) if claude_pid.isdigit() else None
+
+
 def record_session(claude_pid: str, session: str) -> None:
-    """Note the session a Claude Code process now runs, called at session start."""
-    (_sessions_dir() / f"claude-{_key(claude_pid)}").write_text(session)
+    """Note the session a Claude Code process now runs, called at session start.
+
+    The record names the process by its start time as well, so one left by an earlier
+    process with the same pid is ignored. It is replaced whole, so a watch never reads
+    half of it.
+    """
+    path = _sessions_dir() / f"claude-{_key(claude_pid)}"
+    spare = path.with_suffix(f".{os.getpid()}")
+    spare.write_text(f"{_claude_ticks(claude_pid)} {session}")
+    os.replace(spare, path)
 
 
 def _current_session(claude_pid: str) -> str | None:
-    with contextlib.suppress(OSError):
-        return (_sessions_dir() / f"claude-{_key(claude_pid)}").read_text()
+    """The session last recorded for this Claude Code process, None if none was."""
+    with contextlib.suppress(OSError, ValueError):
+        ticks, session = (_sessions_dir() / f"claude-{_key(claude_pid)}").read_text().split(" ", 1)
+        if session and int(ticks) == _claude_ticks(claude_pid):
+            return session
     return None
 
 
@@ -63,14 +80,16 @@ def line(job) -> str:
     return "proqu:" + hooks._describe(job, time.time()).removeprefix("-")
 
 
-def _claim(store: Store, session: str) -> list:
-    if not any(j.state in TERMINAL and not j.notified for j in store.for_session(session)):
-        return []
-    with store.locked():
-        ended = [j for j in store.for_session(session) if j.state in TERMINAL and not j.notified]
-        for job in ended:
+def report_ended(store: Store, session: str) -> None:
+    """Print each ended job not yet reported, oldest first, then mark it reported.
+
+    Printing first means a watch stopped in between repeats a report rather than losing it.
+    """
+    ended = [j for j in store.for_session(session) if j.state in TERMINAL and not j.notified]
+    for job in sorted(ended, key=lambda j: j.ended_at or 0):
+        print(line(job), flush=True)
+        with store.locked():
             store.update(job.id, notified=True)
-    return sorted(ended, key=lambda j: j.ended_at or 0)
 
 
 def run() -> int:
@@ -80,21 +99,22 @@ def run() -> int:
         return 0
     me = procs.current()
     mine = _watcher_file(session)
-    mine.write_text(f"{me[0]} {me[1]}")
-    store = Store(lock_timeout=10)
-    next_tick = 0.0
+    # Claude Code stops a monitor with SIGTERM, which must still clean up
+    signal.signal(signal.SIGTERM, lambda signum, frame: sys.exit(128 + signum))
     try:
+        mine.write_text(f"{me[0]} {me[1]}")
+        store = Store(lock_timeout=10)
+        next_tick = 0.0
         while True:
             if claude_pid and _current_session(claude_pid) not in (None, session):
                 return 0
-            if claude_pid.isdigit() and procs.start_ticks(int(claude_pid)) is None:
+            if claude_pid.isdigit() and _claude_ticks(claude_pid) is None:
                 return 0
             with contextlib.suppress(LockTimeout, StoreError, sqlite3.Error):
                 if time.monotonic() >= next_tick:
                     tick.tick(store)
                     next_tick = time.monotonic() + TICK
-                for job in _claim(store, session):
-                    print(line(job), flush=True)
+                report_ended(store, session)
             time.sleep(POLL)
     except KeyboardInterrupt:
         return 130
