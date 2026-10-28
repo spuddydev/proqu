@@ -2,12 +2,13 @@
 
 import argparse
 import os
+import shlex
 import shutil
 import sys
 import time
 
 from proqu import config, machine, paths
-from proqu.store import TERMINAL, Job, LockTimeout, Store
+from proqu.store import ACTIVE, TERMINAL, Job, LockTimeout, Store
 from proqu.units import format_duration, format_size, parse_duration, parse_size
 
 MAX_BID = 10000
@@ -179,6 +180,103 @@ def check_dependencies(store: Store, session: str, after: list[str]) -> list[str
     return unique
 
 
+# status
+
+
+RECENT_FINISHED = 10
+
+
+def cmd_status(args, command: list[str]) -> int:
+    store = Store()
+    session = current_session()
+    now = time.time()
+    if args.id:
+        print("\n".join(job_details(own_job(store, args.id), now)))
+    else:
+        jobs = store.for_session(session)
+        active = [job for job in jobs if job.state in ACTIVE]
+        finished = sorted(
+            (job for job in jobs if job.state in TERMINAL), key=lambda job: job.ended_at or 0
+        )
+        hidden = 0 if args.all else max(0, len(finished) - RECENT_FINISHED)
+        shown = active + finished[hidden:]
+        if not shown:
+            print("No jobs in this session.")
+        for job in shown:
+            print(job_line(job, now))
+        if hidden:
+            print(f"({hidden} older finished jobs hidden, `proqu status --all` shows them)")
+    budget = config.settings(load_config()).bid_budget
+    remaining = max(0, budget - store.bid_spent(session))
+    print(f"Bid budget: {remaining} of {budget} left for this session.")
+    return 0
+
+
+def job_line(job: Job, now: float) -> str:
+    label = f" {job.name}" if job.name else ""
+    return f"{job.id}{label}: {job_state(job, now)}"
+
+
+def job_state(job: Job, now: float) -> str:
+    if job.state == "queued":
+        waited = format_duration(now - job.submitted_at)
+        return f"queued for {waited}" + (f", bid {job.bid}" if job.bid else "")
+    if job.state == "starting":
+        return "starting"
+    if job.state == "running":
+        ran = now - (job.started_at or now)
+        left = format_duration(job.max - ran)
+        return f"running for {format_duration(ran)}, killed in {left} if still running"
+    took = ""
+    if job.started_at and job.ended_at:
+        took = f" after {format_duration(job.ended_at - job.started_at)}"
+    if job.state == "succeeded":
+        return f"succeeded{took}"
+    return f"{job.state}{took}: {job.reason or 'no reason recorded'}"
+
+
+def job_details(job: Job, now: float) -> list[str]:
+    lines = [
+        f"job {job.id}" + (f" ({job.name})" if job.name else ""),
+        f"  state: {job_state(job, now)}",
+        f"  command: {shlex.join(job.argv)}",
+        f"  in: {job.cwd}",
+        f"  request: {describe_request(job.ram, job.cpus, job.gpus, job.vram)}",
+        f"  estimate {format_duration(job.est)}, killed at {format_duration(job.max)}",
+        f"  bid: {job.bid}",
+    ]
+    if job.after:
+        lines.append(f"  waits for: {', '.join(job.after)}")
+    if job.exit_code is not None:
+        lines.append(f"  exit code: {job.exit_code}")
+    if job.peak_ram is not None:
+        lines.append(f"  peak RAM: {format_size(job.peak_ram)}")
+    return lines
+
+
+# cancel
+
+
+def cmd_cancel(args, command: list[str]) -> int:
+    store = Store()
+    session = current_session()
+    with store.locked():
+        job = own_job(store, args.id)
+        if job.state in TERMINAL:
+            raise ProquError(f"job {job.id} already {job.state}")
+        if store.transition(
+            job.id, ("queued",), "cancelled", reason="cancelled by you", ended_at=time.time()
+        ):
+            if job.bid:
+                store.add_bid_spent(session, -job.bid)
+            refund = f", bid of {job.bid} refunded" if job.bid else ""
+            print(f"Cancelled job {job.id} before it started{refund}.")
+            return 0
+        store.update(job.id, cancel_requested=True)
+    print(f"Cancel requested for job {job.id}, it will be stopped shortly.")
+    return 0
+
+
 # entry point
 
 
@@ -213,6 +311,15 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--name", help="a short label to recognise the job by")
     submit.add_argument("--cwd", help="working directory (default: the current one)")
     submit.set_defaults(handler=cmd_submit)
+
+    status = commands.add_parser("status", help="show this session's jobs")
+    status.add_argument("id", nargs="?", help="show one job in detail")
+    status.add_argument("--all", action="store_true", help="include every finished job")
+    status.set_defaults(handler=cmd_status)
+
+    cancel = commands.add_parser("cancel", help="cancel one of this session's jobs")
+    cancel.add_argument("id")
+    cancel.set_defaults(handler=cmd_cancel)
     return parser
 
 
