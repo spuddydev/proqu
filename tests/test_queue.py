@@ -306,3 +306,14 @@ def test_wait_reports_a_job_killed_at_its_max_runtime(queue, quick, capsys):
     assert "still running at its max runtime of 1s" in out
     assert "the job broke its own limit, not the queue's" in out
     assert out.endswith("started\n")
+
+
+def test_wait_reports_a_job_failed_by_its_parent(queue, quick, capsys):
+    parent = submit(command=("sh", "-c", "exit 3"))
+    child = submit("--after", parent.id)
+    settle([parent.id, child.id])
+    capsys.readouterr()
+    assert main(["wait", child.id]) == 1
+    out = capsys.readouterr().out
+    assert f"Job {child.id} failed before it started: job {parent.id}, which it waits for" in out
+    assert "resubmit the job it waits for first" in out
