@@ -192,11 +192,16 @@ class _Pool:
                 self.long_vram[g] += sign * req.vram
 
     def _over_share(self, req: Request) -> bool:
-        """Whether a long job would take long jobs past their share of RAM or cores."""
+        """Whether a long job would take long jobs past their share of RAM, cores or any GPU.
+
+        A GPU already past its share holds a long job running alone, so nothing joins it.
+        """
         if not req.long or not self.long_jobs:
             return False
-        return self.long_ram + req.ram > self.share_ram or (
-            self.long_cpus + req.cpus > self.share_cpus
+        return (
+            self.long_ram + req.ram > self.share_ram
+            or self.long_cpus + req.cpus > self.share_cpus
+            or any(self.long_vram[g] > self.share_vram[g] for g in self.long_vram)
         )
 
     def _gpu_in_share(self, req: Request, g: int) -> bool:

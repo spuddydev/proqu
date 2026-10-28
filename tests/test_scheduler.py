@@ -747,3 +747,13 @@ def test_cores_outside_lowered_limits_do_not_count_against_the_share():
     queued = [q("long", cpus=2, mx=DAY)]
     assert started(share_run(four, running, queued, share=Share(12 * 3600, 100))) == ["long"]
     assert started(share_run(four, running, queued)) == ["long"]
+
+
+def test_a_long_job_over_the_gpu_share_runs_alone():
+    one = Limits(64 * G, tuple(range(8)), (Gpu(0, "u0", 24 * G),))
+    # 20G of a 24G GPU is over the 18G share, so it runs only with no other long job
+    assert started(share_run(one, [], [q("big", mx=DAY, gpus=1, vram=20)])) == ["big"]
+    running = [r("big", mx=DAY, gpu_ids=(0,), vram=20)]
+    # and while it runs, no other long job starts, even one without a GPU
+    assert started(share_run(one, running, [q("long", mx=DAY)])) == []
+    assert started(share_run(one, running, [q("short", mx=60)])) == ["short"]
