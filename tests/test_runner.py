@@ -162,3 +162,23 @@ def test_job_that_exits_cleanly_after_the_polite_kill_still_counts_as_killed(hom
     job = starting_job(["sh", "-c", "trap 'exit 0' TERM; sleep 30 & wait"], max=1)
     runner.supervise(job.id)
     assert ended(job).state == "killed"
+
+
+def test_running_job_stops_on_cancel(home):
+    import threading
+
+    job = starting_job(["sleep", "30"])
+    store = Store()
+
+    def cancel_soon():
+        while store.get(job.id).state != "running":
+            time.sleep(0.05)
+        with store.locked():
+            store.update(job.id, cancel_requested=True)
+
+    threading.Thread(target=cancel_soon, daemon=True).start()
+    started = time.monotonic()
+    runner.supervise(job.id)
+    done = ended(job)
+    assert (done.state, done.reason) == ("cancelled", "cancelled by you")
+    assert time.monotonic() - started < 10

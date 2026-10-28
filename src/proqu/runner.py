@@ -131,6 +131,9 @@ def watch(store: Store, job: Job, proc: subprocess.Popen) -> tuple[str, str] | N
             return None
         except subprocess.TimeoutExpired:
             pass
+        current = store.get(job.id)
+        if current is not None and current.cancel_requested:
+            return "cancelled", CANCELLED
         if time.monotonic() >= deadline:
             return (
                 "killed",
