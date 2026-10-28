@@ -68,8 +68,17 @@ def spawn_supervisor(job_id: str) -> tuple[int, int]:
 
 
 def supervise(job_id: str) -> None:
-    """Run one starting job to its end. This is the supervisor's whole life."""
+    """Run one starting job to its end, then let the queue move on."""
     store = Store()
+    try:
+        _supervise(store, job_id)
+    finally:
+        from proqu.tick import tick
+
+        tick(store)
+
+
+def _supervise(store: Store, job_id: str) -> None:
     settings = _settings()
     with store.locked():
         job = store.get(job_id)

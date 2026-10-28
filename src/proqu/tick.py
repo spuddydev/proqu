@@ -1,0 +1,167 @@
+"""One scheduling pass: recover lost jobs, fail doomed ones, start what fits.
+
+There is no resident server. A pass runs at the start of every command that
+reads or changes jobs, and whenever a supervisor finishes, so the queue moves
+whenever anything happens.
+"""
+
+import os
+import signal
+import time
+
+from proqu import config, machine, paths, procs, runner, scheduler
+from proqu.store import Job, Store
+
+LOST = "its supervisor was lost (machine restart or crash), resubmit it"
+
+
+def tick(store: Store | None = None) -> None:
+    store = store or Store()
+    try:
+        current = config.load(paths.config_path())
+    except ValueError:
+        # the commands report a broken config, the queue just waits for a fix
+        return
+    limits = to_limits(config.effective_limits(machine.snapshot(), current))
+    aging = config.settings(current).aging_per_minute
+    # a supervisor started from inside a job would live in that job's cgroup
+    # and die with it, so passes inside jobs leave starting to the next one
+    may_start = not os.environ.get("PROQU_JOB_ID")
+    with store.locked():
+        now = time.time()
+        lost = reap(store, now)
+        active = store.active()
+        plan = scheduler.plan(
+            limits,
+            [to_running(job, now) for job in active if job.state != "queued"],
+            [to_queued(job) for job in active if job.state == "queued"],
+            dependency_states(store, active),
+            now,
+            aging,
+        )
+        for fail in plan.fail:
+            end_queued(store, fail.id, fail.reason, now)
+        if may_start:
+            for start in plan.start:
+                begin(store, start)
+    kill_leftovers(lost)
+
+
+def to_limits(limits: machine.Machine) -> scheduler.Limits:
+    gpus = tuple(scheduler.Gpu(gpu.index, gpu.uuid, gpu.vram) for gpu in limits.gpus)
+    return scheduler.Limits(ram=limits.ram, cpu_ids=limits.cpu_ids, gpus=gpus)
+
+
+def request(job: Job) -> scheduler.Request:
+    return scheduler.Request(ram=job.ram, cpus=job.cpus, gpus=job.gpus, vram=job.vram)
+
+
+def to_running(job: Job, now: float) -> scheduler.Running:
+    return scheduler.Running(
+        id=job.id,
+        req=request(job),
+        cpu_ids=tuple(job.cpu_ids),
+        gpu_ids=tuple(job.gpu_ids),
+        started_at=job.started_at or now,
+        est=job.est,
+        max=job.max,
+    )
+
+
+def to_queued(job: Job) -> scheduler.Queued:
+    return scheduler.Queued(
+        id=job.id,
+        req=request(job),
+        bid=job.bid,
+        submitted_at=job.submitted_at,
+        est=job.est,
+        max=job.max,
+        after=tuple(job.after),
+    )
+
+
+def dependency_states(store: Store, active: list[Job]) -> dict[str, str]:
+    """Terminal states of every dependency that is no longer queued or running."""
+    live = {job.id for job in active}
+    wanted = sorted({dep for job in active for dep in job.after} - live)
+    return store.states(wanted) if wanted else {}
+
+
+def end_queued(store: Store, job_id: str, reason: str, now: float) -> None:
+    """Fail a job that never started, giving its bid back."""
+    job = store.get(job_id)
+    if not job or not store.transition(job_id, ("queued",), "failed", reason=reason, ended_at=now):
+        return
+    if job.bid:
+        store.add_bid_spent(job.session, -job.bid)
+
+
+def begin(store: Store, start: scheduler.Start) -> None:
+    job = store.get(start.id)
+    moved = store.transition(
+        start.id,
+        ("queued",),
+        "starting",
+        cpu_ids=list(start.cpu_ids),
+        gpu_ids=list(start.gpu_ids),
+    )
+    if not job or not moved:
+        return
+    try:
+        pid, ticks = runner.spawn_supervisor(start.id)
+    except OSError as error:
+        store.transition(
+            start.id,
+            ("starting",),
+            "failed",
+            reason=f"could not start its supervisor: {error}",
+            ended_at=time.time(),
+        )
+        if job.bid:
+            store.add_bid_spent(job.session, -job.bid)
+        return
+    store.update(start.id, supervisor_pid=pid, supervisor_start=ticks)
+
+
+def reap(store: Store, now: float) -> list[str]:
+    """End jobs whose supervisor is gone, returning their ids."""
+    rebooted = _rebooted()
+    lost = []
+    for job in store.active():
+        if job.state == "queued":
+            continue
+        if not rebooted and procs.is_alive(job.supervisor_pid, job.supervisor_start):
+            continue
+        if job.cancel_requested:
+            state, reason = "cancelled", runner.CANCELLED
+        else:
+            state, reason = "failed", LOST
+        if store.transition(job.id, ("starting", "running"), state, reason=reason, ended_at=now):
+            if job.state == "starting" and job.bid:
+                store.add_bid_spent(job.session, -job.bid)
+            if not rebooted:
+                lost.append(job.id)
+    return lost
+
+
+def _rebooted() -> bool:
+    """Whether the machine restarted since the last pass. Call under the lock."""
+    current = procs.boot_id()
+    path = paths.state_dir() / "boot_id"
+    try:
+        previous = path.read_text().strip()
+    except OSError:
+        previous = ""
+    if current and current != previous:
+        path.write_text(current + "\n")
+    return bool(previous and current and previous != current)
+
+
+def kill_leftovers(job_ids: list[str]) -> None:
+    """Best effort: kill processes of lost jobs, found by the id they carry."""
+    for job_id in job_ids:
+        for pid in procs.job_members(job_id, None):
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                continue

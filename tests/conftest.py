@@ -1,6 +1,6 @@
 import pytest
 
-from proqu import machine
+from proqu import machine, tick
 
 G = 1024**3
 
@@ -18,4 +18,6 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("PROQU_SESSION", "s1")
     monkeypatch.delenv("PROQU_JOB_ID", raising=False)
     monkeypatch.setattr(machine, "snapshot", lambda refresh=False: FAKE_MACHINE)
+    # command tests check the commands alone, real runs are in the queue tests
+    monkeypatch.setattr(tick, "tick", lambda store=None: None)
     return tmp_path
