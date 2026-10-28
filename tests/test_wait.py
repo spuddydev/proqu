@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import time
 
 import pytest
@@ -113,3 +114,17 @@ def test_wait_stops_when_the_config_breaks_while_waiting(home, capsys, monkeypat
     lines = capsys.readouterr().out.splitlines()
     assert lines[0].startswith(f"Job {second.id} is queued, position 2")
     assert "nothing can start" in lines[-1]
+
+
+@pytest.mark.parametrize("error", [cli.LockTimeout("busy"), sqlite3.OperationalError("disk")])
+def test_wait_report_stands_when_marking_it_seen_fails(home, capsys, monkeypatch, error):
+    job = submit()
+    end(job.id, state="succeeded", started_at=time.time() - 5, exit_code=0)
+
+    def refuse(self, job_id, **changes):
+        raise error
+
+    monkeypatch.setattr(Store, "update", refuse)
+    capsys.readouterr()
+    assert main(["wait", job.id]) == 0
+    assert f"Job {job.id} succeeded after 5s" in capsys.readouterr().out
