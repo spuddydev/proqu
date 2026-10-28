@@ -2,6 +2,7 @@ import pytest
 
 from proqu.scheduler import (
     Fail,
+    Free,
     Gpu,
     Limits,
     Plan,
@@ -555,3 +556,93 @@ def test_project_keeps_the_length_delay_when_replaying_later_steps():
     out = project(L8, busy, jobs, {}, NOW, 10, CAP)
     assert out["short"].start == NOW + 100
     assert out["long"].start == NOW + 100 + 60
+
+
+# Free memory
+
+
+def free_run(limits, running, queued, free):
+    return plan(limits, running, queued, {}, NOW, 10, free=free)
+
+
+BIG = Limits(62 * G, tuple(range(8)), ())
+
+
+def test_shared_machine_holds_a_job_other_programs_leave_no_room_for():
+    # 62G machine, but other users leave only 8G free
+    p = free_run(BIG, [], [q("big", ram=40)], Free(8 * G))
+    assert started(p) == []
+    assert p.held == {"big": "ram"}
+    assert p.fail == []
+
+
+def test_job_starts_once_the_memory_is_free():
+    p = free_run(BIG, [], [q("big", ram=40)], Free(50 * G))
+    assert started(p) == ["big"]
+    assert p.held == {}
+
+
+def test_without_free_memory_the_limits_alone_decide():
+    assert started(run(BIG, [], [q("big", ram=40)])) == ["big"]
+
+
+def test_jobs_started_in_one_pass_use_up_the_free_memory():
+    p = free_run(L8, [], [q("a", ram=3, t=1), q("b", ram=3, t=2)], Free(5 * G))
+    assert started(p) == ["a"]
+    assert p.held == {"b": "ram"}
+
+
+def test_smaller_job_may_pass_a_held_one_when_it_leaves_room_for_it():
+    # big fits the limits but not the free memory, small fits both and leaves room
+    p = free_run(L8, [], [q("big", ram=6, t=1), q("small", ram=1, t=2)], Free(3 * G))
+    assert started(p) == ["small"]
+    assert p.held == {"big": "ram"}
+
+
+def test_held_job_keeps_its_room_in_the_limits():
+    # small fits the free memory, but would leave the held job no room in the limits
+    queued = [q("big", ram=6, t=1), q("small", ram=3, t=2)]
+    p = free_run(L8, [], queued, Free(4 * G))
+    assert started(p) == []
+    assert p.held == {"big": "ram"}
+
+
+def test_free_memory_never_starts_what_the_limits_refuse():
+    p = free_run(L8, [r("run", ram=6)], [q("a", ram=4)], Free(60 * G))
+    assert started(p) == []
+    assert p.held == {}
+
+
+def test_free_gpu_memory_chooses_the_gpu():
+    # best fit by the limits is GPU 1, but only GPU 0 has the memory free
+    job = q("g", gpus=1, vram=10)
+    assert started(run(GPUS, [], [job])) == ["g"] and run(GPUS, [], [job]).start[0].gpu_ids == (1,)
+    p = free_run(GPUS, [], [job], Free(60 * G, {0: 20 * G, 1: 4 * G}))
+    assert [s.gpu_ids for s in p.start] == [(0,)]
+
+
+def test_gpu_job_held_when_no_gpu_has_the_memory_free():
+    p = free_run(GPUS, [], [q("g", gpus=1, vram=10)], Free(60 * G, {0: 4 * G, 1: 4 * G}))
+    assert started(p) == []
+    assert p.held == {"g": "gpu"}
+
+
+def test_gpu_job_held_when_gpu_memory_cannot_be_read():
+    queued = [q("g", gpus=1, vram=10, t=1), q("cpu", t=2)]
+    p = free_run(GPUS, [], queued, Free(60 * G, None))
+    # the job without a GPU is not held back by GPU memory
+    assert started(p) == ["cpu"]
+    assert p.held == {"g": "gpu-unread"}
+
+
+def test_gpu_jobs_started_in_one_pass_use_up_free_gpu_memory():
+    queued = [q("a", gpus=1, vram=10, t=1), q("b", gpus=1, vram=10, t=2)]
+    p = free_run(GPUS, [], queued, Free(60 * G, {0: 15 * G, 1: 0}))
+    assert started(p) == ["a"]
+    assert p.held == {"b": "gpu"}
+
+
+def test_projection_ignores_free_memory():
+    # projections stay on the limits, the free memory only ever delays a start
+    out = project(BIG, [], [q("big", ram=40)], {}, NOW, 10)
+    assert out["big"].start == NOW
