@@ -92,20 +92,23 @@ A queued job shows its position, projected start and projected finish. A running
 proqu wait ID [--timeout TIME]
 ```
 
-Waits for the job to end, then prints how it ended, what to do next and the last 20 lines of the log. Run it in the background. It checks the job every 2 seconds and runs a scheduling pass every 10 seconds.
+Waits for the job to end, then prints how it ended, what to do next and the last 20 lines of the log, with the command for the whole log. If the job is queued it first prints its position. Run it in the background. It checks the job every 2 seconds and runs a scheduling pass every 10 seconds.
 
 Exit codes:
 
 | Code | Meaning |
 | --- | --- |
 | 0 | The job succeeded. |
-| 1 | The job ended any other way (failed, killed or cancelled), or there is no such job. |
+| 1 | The job ended any other way (failed, killed or cancelled), there is no such job, or the queue's lock could not be taken. |
 | 2 | The command line was invalid. |
 | 3 | `--timeout` ran out and the job is still going. |
+| 4 | The job is still queued but the queue config is broken, so nothing can start. Tell the owner. |
+| 129 | The wait was stopped with SIGHUP, as when its terminal or session went away. |
 | 130 | The wait was interrupted with Ctrl-C. |
+| 141 | The reader of its output went away (SIGPIPE). |
 | 143 | The wait was stopped with SIGTERM. |
 
-A wait that stops early prints how to start it again. The job is not affected.
+After 3, 4, 129, 130 or 143 the job has not ended and the wait should be run again. A wait that stops early prints how to start it again. The job is not affected.
 
 ### logs
 
@@ -113,7 +116,7 @@ A wait that stops early prints how to start it again. The job is not affected.
 proqu logs ID [--tail N]
 ```
 
-Prints the job's output. The default is the last 200 lines. `--tail 0` prints the whole log. A progress bar that redraws with carriage returns shows only its last drawing in a tail.
+Prints the job's output. The default is the last 200 lines. `--tail 0` prints the whole log. A tail is taken from the last 256 KiB of the log, so fewer lines come back when lines are long. A progress bar that redraws with carriage returns shows only its last drawing in a tail.
 
 ### cancel
 
