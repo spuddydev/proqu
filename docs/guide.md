@@ -155,9 +155,17 @@ Every queued job has a priority:
 priority = bid + 10 points for each minute it has waited
 ```
 
-No bid counts as 0, so with no bids this is plain first in, first out. The 10 is the default and the owner can change it with `aging_per_minute`. Ties go to the job submitted first.
+A long job counts as submitted later than it was, so it has waited less:
 
-Waiting never stops adding points. A bid is only a head start over jobs that were already waiting.
+```
+delay = one tenth of --max, at most 4 hours
+```
+
+For example a job with `--max 1h` counts as submitted 6 minutes later, and one with `--max 3d` as 4 hours later. No bid counts as 0, so with no bids and equal `--max` this is plain first in, first out. With no bids and different `--max`, a shorter job tends to go ahead of a longer one submitted a little earlier.
+
+The 10 is the default and the owner can change it with `aging_per_minute`. The 4 hours is the default and the owner can change it with `length_delay_cap`, where `0` turns the delay off. The delay is counted in aging, so it has no effect if `aging_per_minute` is 0. `proqu limits` shows both. Ties go to the job submitted first.
+
+Waiting never stops adding points. A bid is only a head start over jobs that were already waiting, and a long job that has waited long enough still goes first. A queued long job is told at submit how much later it counts as submitted.
 
 ### Bid budget
 
@@ -167,7 +175,7 @@ A session sees its own bids and remaining budget. It never sees another session'
 
 ### Starting jobs
 
-Jobs are considered in priority order. A job starts when the machine has enough free RAM, cores and GPU memory for its whole request. A job never starts with less than it asked for.
+Jobs are considered in priority order, with the delay for long jobs included. A job starts when the machine has enough free RAM, cores and GPU memory for its whole request. A job never starts with less than it asked for.
 
 ### Backfill and the reservation
 
@@ -202,7 +210,7 @@ The reserve keeps some of the machine free for services and interactive work:
 
 - RAM: 10% of the machine by default.
 - CPUs: 1 core on a machine with 4 or more, else none.
-- It never takes everything. At least 1 byte of RAM and 1 core are left for jobs.
+- It never takes everything. Some RAM and at least 1 core are always left for jobs.
 
 The owner can change the reserve with `reserve_ram` and `reserve_cpus`, and can lower the limits further. See [Config](#config). Agents should not change either.
 
