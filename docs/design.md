@@ -10,8 +10,8 @@ proqu is a command line tool that uses only the Python standard library. It need
 
 Nothing runs between commands. The queue moves on in a scheduling pass, and a pass runs:
 
-- in every command that reads or changes jobs
-- in every hook, using only the cached machine snapshot and skipped if there is none, so a hook stays quick
+- in `submit`, `status`, `cancel` and `wait`. `logs`, `limits` and `config` run none
+- in every hook once the database exists, using only the cached machine snapshot and skipped if there is none, so a hook stays quick
 - when a supervisor ends, which is when a job ends
 - every 10 seconds inside `proqu wait`
 
