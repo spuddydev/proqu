@@ -10,7 +10,7 @@ import shlex
 import sys
 import time
 
-from proqu import paths
+from proqu import paths, procs
 from proqu.store import ACTIVE, TERMINAL, Job, Store
 from proqu.units import format_duration
 
@@ -92,7 +92,33 @@ def prompt(data: dict, session: str) -> dict | None:
     return _context("UserPromptSubmit", lines)
 
 
-HANDLERS = {"session-start": session_start, "prompt": prompt}
+def stop(data: dict, session: str) -> dict | None:
+    if data.get("stop_hook_active") is True:
+        return None
+    store = _open_store()
+    if store is None:
+        return None
+    try:
+        jobs = store.for_session(session)
+        unwatched = [job for job in jobs if job.state in ACTIVE and not _watched(store, job)]
+        finished, more = _claim_finished(store, session)
+    finally:
+        store.close()
+    if not unwatched and not finished:
+        return None
+    lines = []
+    if unwatched:
+        lines += ["proqu jobs of this session are not being waited on:"]
+        lines += _listed(unwatched, 0)
+        lines += [f"For each, {WAIT_HINT}, or run `proqu cancel <id>` if it is no longer needed."]
+    if finished:
+        lines += ["proqu jobs of this session finished and are not yet reported:"]
+        lines += _listed(finished, more)
+        lines += ["Report these outcomes to the user."]
+    return {"decision": "block", "reason": "\n".join(lines)}
+
+
+HANDLERS = {"session-start": session_start, "prompt": prompt, "stop": stop}
 
 
 def _open_store() -> Store | None:
@@ -124,6 +150,10 @@ def _claim_finished(store: Store, session: str) -> tuple[list[Job], int]:
 
 def _unreported(jobs: list[Job]) -> list[Job]:
     return [job for job in jobs if job.state in TERMINAL and not job.notified]
+
+
+def _watched(store: Store, job: Job) -> bool:
+    return any(procs.is_alive(pid, ticks) for pid, ticks in store.waiters(job.id))
 
 
 def _listed(jobs: list[Job], more: int) -> list[str]:
