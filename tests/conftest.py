@@ -19,7 +19,7 @@ def home(tmp_path, monkeypatch):
     monkeypatch.delenv("PROQU_JOB_ID", raising=False)
     monkeypatch.setattr(machine, "snapshot", lambda refresh=False: FAKE_MACHINE)
     # command tests check the commands alone, real runs are in the queue tests
-    monkeypatch.setattr(tick, "tick", lambda store=None: None)
+    monkeypatch.setattr(tick, "tick", lambda store=None, cached_only=False: None)
     # supervisor tests use the watch enforcement unless they ask for cgroups
     monkeypatch.setattr(limits, "cgroups_available", lambda: False)
     return tmp_path
