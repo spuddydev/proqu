@@ -1,6 +1,8 @@
 import os
 import time
 
+import pytest
+
 from proqu.cli import main
 from proqu.store import Store
 
@@ -112,3 +114,73 @@ def test_cannot_cancel_another_sessions_job(home, capsys, monkeypatch):
     monkeypatch.setenv("PROQU_SESSION", "s1")
     assert main(["cancel", theirs.id]) == 1
     assert Store().get(theirs.id).state == "queued"
+
+
+def test_status_hides_the_oldest_finished_jobs(home, capsys):
+    store = Store()
+    ids = []
+    for index in range(12):
+        job = submit()
+        ids.append(job.id)
+        with store.locked():
+            store.update(job.id, state="succeeded", started_at=index, ended_at=index + 1)
+    capsys.readouterr()
+    main(["status"])
+    out = capsys.readouterr().out
+    assert ids[0] not in out and ids[1] not in out
+    assert ids[2] in out and ids[11] in out
+
+
+def test_status_of_running_and_cancelling_jobs(home, capsys):
+    running = submit()
+    overdue = submit()
+    cancelling = submit()
+    store = Store()
+    now = time.time()
+    with store.locked():
+        store.update(running.id, state="running", started_at=now - 60)
+        store.update(overdue.id, state="running", started_at=now - 600)
+        store.update(cancelling.id, state="running", started_at=now, cancel_requested=True)
+    capsys.readouterr()
+    main(["status"])
+    out = capsys.readouterr().out
+    assert f"{running.id}: running for 1m, killed in 4m if still running" in out
+    assert f"{overdue.id}: running for 10m, past its max runtime" in out
+    assert f"{cancelling.id}: running, stopping because you cancelled it" in out
+
+
+def test_cancel_sets_end_time(home):
+    job = submit()
+    main(["cancel", job.id])
+    assert Store().get(job.id).ended_at is not None
+
+
+def test_cancel_of_starting_job_twice_is_fine(home, capsys):
+    job = submit()
+    store = Store()
+    with store.locked():
+        store.update(job.id, state="starting")
+    assert main(["cancel", job.id]) == 0
+    assert main(["cancel", job.id]) == 0
+    assert Store().get(job.id).cancel_requested
+
+
+def test_text_after_double_dash_is_refused_outside_submit(home, capsys):
+    job = submit()
+    with pytest.raises(SystemExit):
+        main(["cancel", job.id, "--", "oops"])
+    assert Store().get(job.id).state == "queued"
+
+
+def test_detail_lines(home, capsys):
+    parent = submit()
+    child = submit("--after", parent.id)
+    store = Store()
+    with store.locked():
+        store.update(child.id, state="failed", exit_code=3, peak_ram=1024**3)
+    capsys.readouterr()
+    main(["status", child.id])
+    out = capsys.readouterr().out
+    assert f"waits for: {parent.id}" in out
+    assert "exit code: 3" in out
+    assert "peak RAM: 1.0G" in out

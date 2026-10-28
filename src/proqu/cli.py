@@ -4,11 +4,12 @@ import argparse
 import os
 import shlex
 import shutil
+import sqlite3
 import sys
 import time
 
 from proqu import config, machine, paths
-from proqu.store import ACTIVE, TERMINAL, Job, LockTimeout, Store
+from proqu.store import ACTIVE, TERMINAL, Job, LockTimeout, Store, StoreError
 from proqu.units import format_duration, format_size, parse_duration, parse_size
 
 MAX_BID = 10000
@@ -59,13 +60,11 @@ def cmd_submit(args, command: list[str]) -> int:
         raise invalid(
             "no command given: put it after --, for example: proqu submit ... -- make -j8"
         )
-    try:
-        ram = parse_size(args.ram)
-        vram = parse_size(args.vram) if args.vram else 0
-        est = parse_duration(args.est)
-        max_time = parse_duration(args.max)
-    except ValueError as error:
-        raise invalid(str(error)) from None
+    ram = parse_flag("--ram", args.ram, parse_size)
+    vram = parse_flag("--vram", args.vram, parse_size) if args.vram is not None else 0
+    est = parse_flag("--est", args.est, parse_duration)
+    max_time = parse_flag("--max", args.max, parse_duration)
+    check_name(args.name)
 
     limits = config.effective_limits(machine.snapshot(), load_config())
     check_request(limits, ram, args.cpus, args.gpus, vram)
@@ -77,9 +76,16 @@ def cmd_submit(args, command: list[str]) -> int:
     if not 0 <= args.bid <= MAX_BID:
         raise invalid(f"--bid must be between 0 and {MAX_BID}")
 
-    cwd = os.path.abspath(args.cwd or os.getcwd())
+    if args.cwd == "":
+        raise invalid("--cwd is empty, give a directory")
+    try:
+        cwd = os.path.abspath(args.cwd if args.cwd is not None else os.getcwd())
+    except FileNotFoundError:
+        raise invalid("your current directory no longer exists, pass --cwd") from None
+    if not os.path.exists(cwd):
+        raise invalid(f"--cwd {cwd} does not exist")
     if not os.path.isdir(cwd):
-        raise invalid(f"working directory {cwd} does not exist")
+        raise invalid(f"--cwd {cwd} is not a directory")
     env = dict(os.environ)
     check_executable(command[0], cwd, env.get("PATH", ""))
 
@@ -128,6 +134,23 @@ def cmd_submit(args, command: list[str]) -> int:
     return 0
 
 
+MAX_NAME = 64
+
+
+def parse_flag(flag: str, text: str, parse):
+    try:
+        return parse(text)
+    except ValueError as error:
+        raise invalid(f"{flag}: {error}") from None
+
+
+def check_name(name: str | None) -> None:
+    if name is None:
+        return
+    if not name or len(name) > MAX_NAME or not name.isprintable():
+        raise invalid(f"--name must be 1 to {MAX_NAME} printable characters on one line")
+
+
 def check_request(limits: machine.Machine, ram: int, cpus: int, gpus: int, vram: int) -> None:
     if ram > limits.ram:
         raise invalid(
@@ -135,7 +158,9 @@ def check_request(limits: machine.Machine, ram: int, cpus: int, gpus: int, vram:
             "lower it or split the work"
         )
     if not 1 <= cpus <= len(limits.cpu_ids):
-        raise invalid(f"--cpus must be between 1 and {len(limits.cpu_ids)} on this machine")
+        raise invalid(
+            f"--cpus {cpus} is outside what the queue allows: between 1 and {len(limits.cpu_ids)}"
+        )
     if gpus < 0:
         raise invalid("--gpus cannot be negative")
     if gpus and not vram:
@@ -150,21 +175,25 @@ def check_request(limits: machine.Machine, ram: int, cpus: int, gpus: int, vram:
         raise invalid(f"--gpus {gpus} is more than the {len(limits.gpus)} GPUs the queue allows")
     big_enough = [gpu for gpu in limits.gpus if gpu.vram >= vram]
     if len(big_enough) < gpus:
-        largest = max(gpu.vram for gpu in limits.gpus)
+        sizes = ", ".join(format_size(gpu.vram) for gpu in limits.gpus)
         raise invalid(
-            f"--vram {format_size(vram)} on {gpus} GPU(s) does not fit: "
-            f"the largest GPU allows {format_size(largest)}"
+            f"--gpus {gpus} --vram {format_size(vram)} does not fit: only {len(big_enough)} "
+            f"of the queue's GPUs allow that much (they allow {sizes})"
         )
 
 
 def check_executable(program: str, cwd: str, path: str) -> None:
-    if "/" in program:
-        found = os.path.join(cwd, program)
-        if os.path.isfile(found) and os.access(found, os.X_OK):
-            return
-    elif shutil.which(program, path=path):
+    if "/" not in program:
+        if not shutil.which(program, path=path):
+            raise invalid(f"cannot find {program!r} on your PATH")
         return
-    raise invalid(f"cannot find an executable {program!r} from {cwd} on your PATH")
+    found = os.path.join(cwd, program)
+    if not os.path.isfile(found):
+        raise invalid(f"no file {found}")
+    if not os.access(found, os.X_OK):
+        raise invalid(
+            f"{found} is not executable: run chmod +x on it, or run it via its interpreter"
+        )
 
 
 def check_dependencies(store: Store, session: str, after: list[str]) -> list[str]:
@@ -221,10 +250,14 @@ def job_state(job: Job, now: float) -> str:
     if job.state == "queued":
         waited = format_duration(now - job.submitted_at)
         return f"queued for {waited}" + (f", bid {job.bid}" if job.bid else "")
+    if job.cancel_requested and job.state in ("starting", "running"):
+        return f"{job.state}, stopping because you cancelled it"
     if job.state == "starting":
         return "starting"
     if job.state == "running":
         ran = now - (job.started_at or now)
+        if ran >= job.max:
+            return f"running for {format_duration(ran)}, past its max runtime and being stopped"
         left = format_duration(job.max - ran)
         return f"running for {format_duration(ran)}, killed in {left} if still running"
     took = ""
@@ -305,6 +338,8 @@ def _of(limit, total, show) -> str:
 def cmd_config(args, command: list[str]) -> int:
     path = paths.config_path()
     if args.action == "show":
+        if args.key:
+            raise invalid("config show takes no key, it lists every setting")
         current = load_config()
         for key, description in config.DESCRIPTIONS.items():
             value = current.get(key, config.DEFAULTS.get(key))
@@ -315,10 +350,16 @@ def cmd_config(args, command: list[str]) -> int:
         raise invalid(f"config {args.action} needs a key")
     if args.action == "set" and args.value is None:
         raise invalid("config set needs a value")
+    if args.action == "unset" and args.value is not None:
+        raise invalid("config unset takes only a key")
     detected = machine.snapshot()
     store = Store()
     with store.locked():
-        current = load_config()
+        # read without validation, so a bad value can still be set or unset
+        try:
+            current = config.load(path, validate=False)
+        except ValueError as error:
+            raise ProquError(str(error)) from None
         try:
             if args.action == "set":
                 updated = config.set_value(current, args.key, args.value, detected)
@@ -352,7 +393,7 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--vram", help="GPU memory needed on each GPU, for example 10G")
     submit.add_argument("--est", required=True, help="honest runtime estimate, for example 20m")
     submit.add_argument(
-        "--max", required=True, help="generous runtime limit; the job is killed at this point"
+        "--max", required=True, help="generous runtime limit, the job is killed when it is reached"
     )
     submit.add_argument(
         "--after",
@@ -372,16 +413,28 @@ def build_parser() -> argparse.ArgumentParser:
     status.set_defaults(handler=cmd_status)
 
     cancel = commands.add_parser("cancel", help="cancel one of this session's jobs")
-    cancel.add_argument("id")
+    cancel.add_argument("id", help="the job id from submit or status")
     cancel.set_defaults(handler=cmd_cancel)
 
     limits = commands.add_parser("limits", help="show what the queue may use on this machine")
     limits.set_defaults(handler=cmd_limits)
 
-    configure = commands.add_parser("config", help="show or lower the queue limits and settings")
-    configure.add_argument("action", nargs="?", default="show", choices=["show", "set", "unset"])
-    configure.add_argument("key", nargs="?")
-    configure.add_argument("value", nargs="?")
+    keys = "\n".join(f"  {key}: {text}" for key, text in config.DESCRIPTIONS.items())
+    configure = commands.add_parser(
+        "config",
+        help="show or change the queue settings (for the machine's owner, not agents)",
+        description=(
+            "Show or change the queue settings. These belong to the person who owns the "
+            "machine; agents should not change them. Resource limits can only be lowered "
+            f"below what the machine has.\n\nkeys:\n{keys}"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    configure.add_argument(
+        "action", nargs="?", default="show", choices=["show", "set", "unset"], help="default: show"
+    )
+    configure.add_argument("key", nargs="?", help="the setting to change")
+    configure.add_argument("value", nargs="?", help="the new value, for set")
     configure.set_defaults(handler=cmd_config)
     return parser
 
@@ -392,12 +445,23 @@ def main(argv: list[str] | None = None) -> int:
     if "--" in argv:
         split = argv.index("--")
         argv, command = argv[:split], argv[split + 1 :]
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args, extra = parser.parse_known_args(argv)
+    if extra and args.command == "submit":
+        parser.error(
+            f"unexpected arguments {' '.join(extra)}: put the job's command after --, "
+            "for example: proqu submit --ram 2G ... -- python train.py"
+        )
+    if extra or (command and args.command != "submit"):
+        parser.error(f"unexpected arguments {' '.join(extra or command)}")
     try:
         return args.handler(args, command)
     except ProquError as error:
         print(f"proqu: {error}", file=sys.stderr)
         return error.code
-    except (LockTimeout, paths.StateDirError) as error:
+    except (LockTimeout, paths.StateDirError, StoreError) as error:
         print(f"proqu: {error}", file=sys.stderr)
+        return 1
+    except (OSError, sqlite3.Error) as error:
+        print(f"proqu: unexpected error: {error}", file=sys.stderr)
         return 1
