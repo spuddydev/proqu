@@ -136,6 +136,26 @@ def test_limits_show_the_default_reserve(home, capsys):
     assert "Kept in reserve for services and interactive work: 1.5G RAM and 1 CPU cores" in out
 
 
+def test_limits_blame_config_when_it_lowers_to_the_reserved_figure(home, capsys):
+    main(["config", "set", "reserve_ram", "8G"])
+    main(["config", "set", "ram", "8G"])
+    main(["config", "set", "reserve_cpus", "1"])
+    main(["config", "set", "cpus", "3"])
+    capsys.readouterr()
+    main(["limits"])
+    out = capsys.readouterr().out
+    assert "RAM: 8.0G (of 16.0G, lowered in config)" in out
+    assert "CPUs: 3 (of 4, lowered in config)" in out
+
+
+def test_limits_blame_the_reserve_when_it_lowers_further_than_config(home, capsys):
+    main(["config", "set", "reserve_ram", "4G"])
+    main(["config", "set", "ram", "14G"])
+    capsys.readouterr()
+    main(["limits"])
+    assert "RAM: 12.0G (of 16.0G, after the reserve)" in capsys.readouterr().out
+
+
 def test_limits_show_a_zero_reserve(home, capsys):
     main(["limits"])
     out = capsys.readouterr().out

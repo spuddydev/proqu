@@ -573,14 +573,16 @@ def cmd_limits(args, command: list[str]) -> int:
     current = load_config()
     limits = config.effective_limits(detected, current)
     settings = config.settings(current)
+    unreserved = config.effective_limits(detected, current, reserved=False)
     held_ram, held_cpus = config.reserve(detected, current)
     print("What the queue may use on this machine:")
     print(
-        f"  RAM: {format_size(limits.ram)}" + _of(limits.ram, detected.ram, held_ram, format_size)
+        f"  RAM: {format_size(limits.ram)}"
+        + _of(limits.ram, unreserved.ram, detected.ram, format_size)
     )
     print(
         f"  CPUs: {len(limits.cpu_ids)}"
-        + _of(len(limits.cpu_ids), len(detected.cpu_ids), held_cpus, str)
+        + _of(len(limits.cpu_ids), len(unreserved.cpu_ids), len(detected.cpu_ids), str)
     )
     if limits.gpus:
         for gpu in limits.gpus:
@@ -613,10 +615,11 @@ def cmd_limits(args, command: list[str]) -> int:
     return 0
 
 
-def _of(limit, total, held, show) -> str:
+def _of(limit, unreserved, total, show) -> str:
+    """Why a limit is below the machine: the reserve only if it took off more than config did."""
     if limit >= total:
         return ""
-    if limit == total - held:
+    if limit < unreserved:
         return f" (of {show(total)}, after the reserve)"
     return f" (of {show(total)}, lowered in config)"
 
