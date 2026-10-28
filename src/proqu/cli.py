@@ -1,14 +1,16 @@
 """The proqu command line. Every message is written for an agent to act on."""
 
 import argparse
+import contextlib
 import os
 import shlex
 import shutil
+import signal
 import sqlite3
 import sys
 import time
 
-from proqu import config, machine, paths
+from proqu import config, machine, paths, procs, report
 from proqu import limits as limits_module
 from proqu import tick as ticking
 from proqu.store import ACTIVE, TERMINAL, Job, LockTimeout, Store, StoreError
@@ -45,6 +47,18 @@ def own_job(store: Store, job_id: str) -> Job:
     if job is None:
         raise ProquError(f"no job {job_id} in this session, see `proqu status` for your jobs")
     return job
+
+
+def queue_outlook(store: Store, now: float) -> dict[str, report.Place]:
+    """Positions and projections of queued jobs, from the limits a pass would use."""
+    current = load_config()
+    limits = ticking.to_limits(config.effective_limits(machine.snapshot(), current))
+    aging = config.settings(current).aging_per_minute
+    return report.outlook(store, current_session(), limits, aging, now)
+
+
+def sentence(text: str) -> str:
+    return text[:1].upper() + text[1:]
 
 
 def describe_request(ram: int, cpus: int, gpus: int, vram: int) -> str:
@@ -135,6 +149,13 @@ def cmd_submit(args, command: list[str]) -> int:
     print(f"estimated {format_duration(est)}, killed at {format_duration(max_time)}.")
     if after:
         print(f"Waits for: {', '.join(after)}.")
+    if now.state == "queued":
+        # the job is queued already, so a failed estimate must not fail the submit
+        with contextlib.suppress(ProquError, OSError, sqlite3.Error):
+            when = time.time()
+            place = queue_outlook(store, when).get(job.id)
+            if place:
+                print(f"{sentence(report.describe_place(place, when))}.")
     print(
         f"Next: run `proqu wait {job.id}` as a background command so you are woken when it ends. "
         f"Check on it with `proqu status {job.id}`."
@@ -238,8 +259,11 @@ def cmd_status(args, command: list[str]) -> int:
     run_pass(store)
     session = current_session()
     now = time.time()
+    # built before printing, so a broken config fails before any output
+    places = queue_outlook(store, now)
+    budget = config.settings(load_config()).bid_budget
     if args.id:
-        print("\n".join(job_details(own_job(store, args.id), now)))
+        print("\n".join(job_details(own_job(store, args.id), now, places)))
     else:
         jobs = store.for_session(session)
         active = [job for job in jobs if job.state in ACTIVE]
@@ -251,24 +275,25 @@ def cmd_status(args, command: list[str]) -> int:
         if not shown:
             print("No jobs in this session.")
         for job in shown:
-            print(job_line(job, now))
+            print(job_line(job, now, places))
         if hidden:
             print(f"({hidden} older finished jobs hidden, `proqu status --all` shows them)")
-    budget = config.settings(load_config()).bid_budget
     remaining = max(0, budget - store.bid_spent(session))
     print(f"Bid budget: {remaining} of {budget} left for this session.")
     return 0
 
 
-def job_line(job: Job, now: float) -> str:
+def job_line(job: Job, now: float, places: dict[str, report.Place]) -> str:
     label = f" {job.name}" if job.name else ""
-    return f"{job.id}{label}: {job_state(job, now)}"
+    return f"{job.id}{label}: {job_state(job, now, places)}"
 
 
-def job_state(job: Job, now: float) -> str:
+def job_state(job: Job, now: float, places: dict[str, report.Place]) -> str:
     if job.state == "queued":
         waited = format_duration(now - job.submitted_at)
-        return f"queued for {waited}" + (f", bid {job.bid}" if job.bid else "")
+        place = places.get(job.id)
+        where = f", {report.describe_place(place, now)}" if place else ""
+        return f"queued for {waited}{where}" + (f", bid {job.bid}" if job.bid else "")
     if job.cancel_requested and job.state in ("starting", "running"):
         return f"{job.state}, stopping because you cancelled it"
     if job.state == "starting":
@@ -278,7 +303,12 @@ def job_state(job: Job, now: float) -> str:
         if ran >= job.max:
             return f"running for {format_duration(ran)}, past its max runtime and being stopped"
         left = format_duration(job.max - ran)
-        return f"running for {format_duration(ran)}, killed in {left} if still running"
+        if ran < job.est:
+            until = format_duration(report.expected_end(job, now) - now)
+            expected = f"expected to finish in about {until}"
+        else:
+            expected = f"past its {format_duration(job.est)} estimate"
+        return f"running for {format_duration(ran)}, {expected}, killed in {left} if still running"
     took = ""
     if job.started_at and job.ended_at:
         took = f" after {format_duration(job.ended_at - job.started_at)}"
@@ -287,10 +317,10 @@ def job_state(job: Job, now: float) -> str:
     return f"{job.state}{took}: {job.reason or 'no reason recorded'}"
 
 
-def job_details(job: Job, now: float) -> list[str]:
+def job_details(job: Job, now: float, places: dict[str, report.Place]) -> list[str]:
     lines = [
         f"job {job.id}" + (f" ({job.name})" if job.name else ""),
-        f"  state: {job_state(job, now)}",
+        f"  state: {job_state(job, now, places)}",
         f"  command: {shlex.join(job.argv)}",
         f"  in: {job.cwd}",
         f"  request: {describe_request(job.ram, job.cpus, job.gpus, job.vram)}",
@@ -329,6 +359,180 @@ def cmd_cancel(args, command: list[str]) -> int:
     run_pass(store)
     print(message)
     return 0
+
+
+# wait
+
+# how often wait looks at its job, and how often it runs a scheduling pass
+WAIT_POLL = 2.0
+WAIT_TICK = 10.0
+LOG_LINES = 20
+TIMED_OUT = 3
+CONFIG_BROKEN = 4
+
+
+# signals that end a wait, each cleaning up first: SIGHUP is what a background command
+# gets when its terminal or session goes away
+STOPPING = (signal.SIGTERM, signal.SIGHUP)
+
+
+class Terminated(Exception):
+    """Raised on SIGTERM or SIGHUP, so a killed wait still cleans up after itself."""
+
+    def __init__(self, signum: int = signal.SIGTERM):
+        super().__init__(signum)
+        self.signum = signum
+
+
+def cmd_wait(args, command: list[str]) -> int:
+    timeout = None
+    if args.timeout is not None:
+        timeout = parse_flag("--timeout", args.timeout, parse_duration)
+    store = Store()
+    job = own_job(store, args.id)
+    pid, ticks = procs.current()
+    previous = {signum: signal.getsignal(signum) for signum in STOPPING}
+
+    def terminated(signum, frame):
+        # one is enough, cleanup must not be interrupted by another
+        for other in STOPPING:
+            signal.signal(other, signal.SIG_IGN)
+        raise Terminated(signum)
+
+    for signum in STOPPING:
+        signal.signal(signum, terminated)
+    stopped = (
+        f"Stopped waiting for job {job.id} before it ended. Run `proqu wait {job.id}` "
+        "as a background command again to keep waiting."
+    )
+    try:
+        with store.locked():
+            store.add_waiter(job.id, pid, ticks)
+        return wait_for(store, job.id, timeout)
+    except KeyboardInterrupt:
+        print(stopped, flush=True)
+        return 130
+    except Terminated as error:
+        print(stopped, flush=True)
+        return 128 + error.signum
+    finally:
+        drop_waiter(job.id, pid)
+        for signum, handler in previous.items():
+            signal.signal(signum, signal.SIG_DFL if handler is None else handler)
+
+
+def drop_waiter(job_id: str, pid: int) -> None:
+    """Remove the waiter row even if a signal lands before the signals are ignored."""
+    for _ in range(3):
+        try:
+            for signum in STOPPING:
+                signal.signal(signum, signal.SIG_IGN)
+            remove_waiter(job_id, pid)
+            return
+        except (Terminated, KeyboardInterrupt):
+            continue
+
+
+def wait_for(store: Store, job_id: str, timeout: float | None) -> int:
+    began = time.monotonic()
+    next_tick = began
+    first = True
+    while True:
+        if time.monotonic() >= next_tick:
+            quiet_tick(store)
+            next_tick = time.monotonic() + WAIT_TICK
+        job = own_job(store, job_id)
+        if job.state in TERMINAL:
+            return report_end(store, job)
+        if job.state == "queued":
+            try:
+                load_config()
+            except ProquError as error:
+                print(
+                    f"Stopped waiting: job {job.id} is still queued and nothing can start while "
+                    f"the queue config is broken ({error}). Tell the user, then run "
+                    f"`proqu wait {job.id}` again once it is fixed.",
+                    flush=True,
+                )
+                return CONFIG_BROKEN
+        if first and job.state == "queued":
+            now = time.time()
+            place = queue_outlook(store, now).get(job.id)
+            if place:
+                print(f"Job {job.id} is queued, {report.describe_place(place, now)}.", flush=True)
+        first = False
+        left = None if timeout is None else timeout - (time.monotonic() - began)
+        if left is not None and left <= 0:
+            print(
+                f"Stopped waiting after {format_duration(timeout)}: job {job.id} is still "
+                f"{job.state}. Run `proqu wait {job.id}` again to keep waiting.",
+                flush=True,
+            )
+            return TIMED_OUT
+        time.sleep(WAIT_POLL if left is None else min(WAIT_POLL, left))
+
+
+def report_end(store: Store, job: Job) -> int:
+    print(report.outcome(job, report.tail_lines(paths.log_path(job.id), LOG_LINES)), flush=True)
+    # after printing, so a crash repeats the report rather than losing it
+    # the report is out and the job's outcome stands, so a failed mark must not change the exit code
+    try:
+        with contextlib.suppress(LockTimeout, sqlite3.Error, OSError), store.locked():
+            store.update(job.id, notified=True)
+    except Terminated:
+        # the job did end and was reported, so this is not a wait that stopped early
+        pass
+    return 0 if job.state == "succeeded" else 1
+
+
+def quiet_tick(store: Store) -> None:
+    """A scheduling pass that never ends the wait: a busy queue just means try later."""
+    with contextlib.suppress(LockTimeout, sqlite3.Error):
+        ticking.tick(store)
+
+
+def remove_waiter(job_id: str, pid: int) -> None:
+    # a fresh connection, as an interrupted one may be left mid transaction
+    with contextlib.suppress(LockTimeout, StoreError, sqlite3.Error):
+        store = Store(lock_timeout=10)
+        try:
+            with store.locked():
+                store.remove_waiter(job_id, pid)
+        finally:
+            store.close()
+
+
+# logs
+
+
+def cmd_logs(args, command: list[str]) -> int:
+    if args.tail < 0:
+        raise invalid("--tail cannot be negative, use 0 for the whole log")
+    job = own_job(Store(), args.id)
+    path = paths.log_path(job.id)
+    if args.tail:
+        lines = report.tail_lines(path, args.tail) or []
+        for line in lines:
+            print(line)
+        wrote = bool(lines)
+    else:
+        wrote = copy_log(path)
+    if not wrote:
+        print(f"No output from job {job.id} so far (state: {job.state}).")
+    return 0
+
+
+def copy_log(path) -> bool:
+    """Write a whole log out, returning whether it held anything."""
+    wrote = False
+    try:
+        with open(path, encoding="utf-8", errors="replace", newline="") as log:
+            while chunk := log.read(1 << 16):
+                sys.stdout.write(chunk)
+                wrote = True
+    except FileNotFoundError:
+        pass
+    return wrote
 
 
 # limits and config
@@ -448,6 +652,35 @@ def build_parser() -> argparse.ArgumentParser:
     cancel.add_argument("id", help="the job id from submit or status")
     cancel.set_defaults(handler=cmd_cancel)
 
+    wait = commands.add_parser(
+        "wait",
+        help="wait for one of this session's jobs to end and report how it went",
+        description=(
+            "Wait for a job to end, then report how it ended, what to do next and the end of "
+            "its log. Run it as a background command so you are woken when the job ends. "
+            "Exit codes: 0 the job succeeded, 1 it ended any other way, 3 --timeout ran out, "
+            "4 the job is still queued but the queue config is broken, 130 or 143 the wait was "
+            "interrupted. For 3, 4, 130 and 143 the job has not ended, so wait again."
+        ),
+    )
+    wait.add_argument("id", help="the job id from submit or status")
+    wait.add_argument("--timeout", help="stop waiting after this long, for example 30m")
+    wait.set_defaults(handler=cmd_wait)
+
+    logs = commands.add_parser("logs", help="show the output of one of this session's jobs")
+    logs.add_argument("id", help="the job id from submit or status")
+    logs.add_argument(
+        "--tail",
+        type=int,
+        default=200,
+        metavar="N",
+        help=(
+            "last N lines, taken from the last 256 KiB of the log so fewer come back when "
+            "lines are long (default 200, 0 for the whole log)"
+        ),
+    )
+    logs.set_defaults(handler=cmd_logs)
+
     limits = commands.add_parser("limits", help="show what the queue may use on this machine")
     limits.set_defaults(handler=cmd_limits)
 
@@ -494,6 +727,10 @@ def main(argv: list[str] | None = None) -> int:
     except (LockTimeout, paths.StateDirError, StoreError) as error:
         print(f"proqu: {error}", file=sys.stderr)
         return 1
+    except BrokenPipeError:
+        # the reader went away, as in `proqu logs ID | head`: say nothing, as head would
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 128 + signal.SIGPIPE
     except (OSError, sqlite3.Error) as error:
         print(f"proqu: unexpected error: {error}", file=sys.stderr)
         return 1

@@ -1,5 +1,6 @@
 import pytest
 
+from proqu import cli
 from proqu.cli import main
 from proqu.store import Store
 
@@ -180,3 +181,36 @@ def test_empty_session_means_default(home, monkeypatch):
     monkeypatch.setenv("PROQU_SESSION", "")
     assert submit() == 0
     assert len(Store().for_session("default")) == 1
+
+
+def test_queued_submit_shows_its_place(home, capsys):
+    assert submit("--cpus", "4") == 0
+    capsys.readouterr()
+    assert submit("--cpus", "4") == 0
+    out = capsys.readouterr().out
+    assert "Position 2 in the queue, expected to start in 1m and finish in 2m." in out
+
+
+def test_place_never_shows_other_sessions(home, capsys, monkeypatch):
+    monkeypatch.setenv("PROQU_SESSION", "s2")
+    assert submit("--cpus", "4", "--name", "theirs", "--bid", "77") == 0
+    theirs = Store().for_session("s2")[0]
+    monkeypatch.setenv("PROQU_SESSION", "s1")
+    capsys.readouterr()
+    assert submit("--cpus", "4") == 0
+    out = capsys.readouterr().out
+    assert "Position 2 in the queue, expected to start in 1m" in out
+    assert theirs.id not in out and "theirs" not in out and "77" not in out
+
+
+def test_submit_succeeds_when_the_queue_outlook_fails(home, capsys, monkeypatch):
+    assert submit("--cpus", "4") == 0
+    monkeypatch.setattr(
+        cli, "queue_outlook", lambda store, now: (_ for _ in ()).throw(cli.ProquError("broken"))
+    )
+    capsys.readouterr()
+    assert submit("--cpus", "4") == 0
+    out = capsys.readouterr().out
+    assert out.startswith("Queued job ")
+    assert "Next: run `proqu wait" in out
+    assert len(Store().for_session("s1")) == 2
