@@ -109,3 +109,13 @@ def test_damaged_database_is_a_message(home, capsys):
     paths.db_path().write_bytes(b"not a database" * 200)
     assert main(["status"]) == 1
     assert "damaged" in capsys.readouterr().err
+
+
+def test_limits_name_the_enforcement(home, capsys, monkeypatch):
+    from proqu import limits
+
+    main(["limits"])
+    assert "enable-linger" in capsys.readouterr().out
+    monkeypatch.setattr(limits, "cgroups_available", lambda: True)
+    main(["limits"])
+    assert "enforced by the kernel" in capsys.readouterr().out

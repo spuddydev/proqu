@@ -9,6 +9,7 @@ import sys
 import time
 
 from proqu import config, machine, paths
+from proqu import limits as limits_module
 from proqu import tick as ticking
 from proqu.store import ACTIVE, TERMINAL, Job, LockTimeout, Store, StoreError
 from proqu.units import format_duration, format_size, parse_duration, parse_size
@@ -346,6 +347,14 @@ def cmd_limits(args, command: list[str]) -> int:
             print(f"  GPU {gpu.index}: {format_size(gpu.vram)} memory")
     else:
         print("  GPUs: none")
+    if limits_module.cgroups_available():
+        print("Limits are enforced by the kernel: each job runs in its own cgroup.")
+    else:
+        print(
+            "Limits are enforced by watching each job about once a second. For kernel "
+            "enforcement the machine needs systemd for the user and linger "
+            "(`loginctl enable-linger`)."
+        )
     print(f"Each session may bid up to {settings.bid_budget} points in total.")
     print(f"Every queued job gains {settings.aging_per_minute:g} priority points per minute.")
     return 0
