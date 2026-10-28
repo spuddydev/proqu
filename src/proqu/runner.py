@@ -227,13 +227,34 @@ def _check_runnable(job: Job) -> None:
     raise FileNotFoundError(2, "No such file or directory", program)
 
 
+# variables that also choose AMD GPUs, each filtering what the one before it left
+# visible, so a job given GPUs by ROCR_VISIBLE_DEVICES must not inherit them
+AMD_FILTERS = ("HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES", "GPU_DEVICE_ORDINAL")
+# hides every GPU: no device has this index
+NO_GPU = "-1"
+
+
 def gpu_env(job: Job, env: dict[str, str]) -> None:
     """Show the job its own GPUs only, in the way its GPUs' vendor reads."""
     vendor = machine.gpu_vendor(machine.snapshot())
     if vendor == "apple":
         # Metal has no such variable, a job without a GPU is trusted not to use it
         return
-    env["CUDA_VISIBLE_DEVICES"] = ",".join(gpu_uuids(job))
+    if vendor != "amd":
+        env["CUDA_VISIBLE_DEVICES"] = ",".join(gpu_uuids(job))
+        return
+    if not job.gpu_ids:
+        # every filter hides every GPU, so stacking them does no harm
+        for name in ("ROCR_VISIBLE_DEVICES", *AMD_FILTERS):
+            env[name] = NO_GPU
+        return
+    for name in AMD_FILTERS:
+        env.pop(name, None)
+    # an index counts the GPUs the runtime sees, so a uuid is safer when there is one
+    env["ROCR_VISIBLE_DEVICES"] = ",".join(
+        uuid if uuid.startswith("GPU-") else str(index)
+        for index, uuid in zip(job.gpu_ids, gpu_uuids(job), strict=True)
+    )
 
 
 def launch(job: Job, log, argv: list[str]) -> subprocess.Popen:

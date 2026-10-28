@@ -10,6 +10,7 @@ import pytest
 
 from proqu import amd, cli, darwin, limits, machine, procs, runner
 from proqu.cli import main
+from proqu.store import Job
 
 from .test_runner import ended, log_of, starting_job
 
@@ -131,6 +132,45 @@ def test_limits_on_macos_say_how_jobs_are_watched(home, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "four times a second" in out
     assert "cannot pin a job to CPUs" in out
+
+
+# AMD
+
+AMD_MACHINE = machine.Machine(
+    ram=16 * G,
+    cpu_ids=(0, 1, 2, 3),
+    gpus=(
+        machine.GpuInfo(0, "GPU-00000000000000aa", 24 * G, "amd"),
+        machine.GpuInfo(2, "AMD-2", 16 * G, "amd"),
+    ),
+)
+
+
+def amd_job(**changes) -> Job:
+    script = "echo [$ROCR_VISIBLE_DEVICES] [$HIP_VISIBLE_DEVICES] [$CUDA_VISIBLE_DEVICES]"
+    return starting_job(["sh", "-c", script], **changes)
+
+
+@pytest.fixture
+def amd_box(home, monkeypatch):
+    monkeypatch.setattr(machine, "snapshot", lambda refresh=False: AMD_MACHINE)
+    monkeypatch.setattr(machine, "cached", lambda: AMD_MACHINE)
+    monkeypatch.setattr(amd, "apps", lambda: [])
+    monkeypatch.setenv("HIP_VISIBLE_DEVICES", "0")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
+
+
+def test_amd_job_sees_only_its_gpus(amd_box):
+    job = amd_job(env=dict(os.environ), gpus=2, vram=G, gpu_ids=[0, 2])
+    runner.supervise(job.id)
+    # the other filters would apply again to the GPUs left visible, so they are dropped
+    assert log_of(job).strip() == "[GPU-00000000000000aa,2] [] []"
+
+
+def test_amd_job_without_a_gpu_sees_none(amd_box):
+    job = amd_job(env=dict(os.environ))
+    runner.supervise(job.id)
+    assert log_of(job).strip() == "[-1] [-1] [-1]"
 
 
 def test_apple_gpu_is_not_watched_and_has_no_variable(home, monkeypatch):
