@@ -383,4 +383,4 @@ It is created private (mode 0700).
 | `cgroups.json` | The cgroup probe result, cached for a day. |
 | `boot_id` | Used to notice a restart. |
 
-Logs and the database are never pruned. See the [design notes](design.md).
+Logs and the database are never pruned. The database holds each job's whole environment from submit, so any secret in it stays on disk. Keep tokens out of the environment where you can. The directory is private, mode 0700. See the [design notes](design.md).
