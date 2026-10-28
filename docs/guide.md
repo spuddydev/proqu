@@ -366,7 +366,7 @@ If the config file is broken, commands report it and the queue waits for a fix. 
 
 ## For the owner
 
-The owner is the person who owns the machine. They need `proqu` on their own PATH. The plugin only gives it to the agent, so see the README for how to link it.
+The owner is the person who owns the machine. The install script links `proqu` into `~/.local/bin`, so the owner can run it too.
 
 Each session sees only its own jobs, and `proqu status --all` covers only the caller's session. There is no command to list sessions or see everything. The owner can still look and act:
 
