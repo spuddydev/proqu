@@ -182,7 +182,7 @@ Waiting never stops adding points. A bid is only a head start over jobs that wer
 
 ### Bid budget
 
-Each session has a budget of 11000 points, set by `bid_budget`. A bid is spent when the job is submitted, up to 10000 on one job. It is refunded if the job is cancelled while queued, or fails before it starts. It is not refunded once the job has run.
+Each session has a budget of 11000 points, set by `bid_budget`. A bid is spent when the job is submitted, up to 10000 on one job. It is refunded if the job is cancelled while queued, or fails before it starts. It is not refunded once the job has run, even if it was lost with its supervisor.
 
 A session sees its own bids and remaining budget. It never sees another session's jobs or bids. Queue positions count every session's jobs, but show nothing about them.
 
@@ -192,7 +192,7 @@ Jobs are considered in priority order, with the delay for long jobs included. A 
 
 ### Backfill and the reservation
 
-The first job in order that does not fit is blocked. proqu works out when it will fit, assuming every running job lasts until its `--max`, and reserves that time for it.
+A job still waiting for a parent is skipped. It neither starts nor holds a reservation, however high its priority. The first other job in order that does not fit is blocked. proqu works out when it will fit, assuming every running job lasts until its `--max`, and reserves that time for it.
 
 A later job may start ahead of it only if:
 
@@ -217,7 +217,7 @@ A failed dependency is reported with the parent's id. The bid of a job that neve
 
 ### What the limits are
 
-The queue may use what the machine has, as detected at run time, minus a reserve. The detection includes any memory limit or CPU quota on the cgroup that proqu itself runs in. Anything over the limit is refused at submit.
+The queue may use what the machine has, as detected at run time, minus a reserve. The detection includes any memory limit or CPU quota on the cgroup that proqu itself runs in. The usable cores are the ones proqu itself may run on, trimmed to any quota, so their numbers may not start at 0 or be in a row. If an `nvidia-smi` query fails, proqu keeps the GPU list it had before. Anything over the limit is refused at submit.
 
 The reserve keeps some of the machine free for services and interactive work:
 
