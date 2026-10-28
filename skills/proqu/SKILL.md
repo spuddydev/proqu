@@ -52,7 +52,7 @@ Check what the queue allows with `proqu limits`. A request over the limit is ref
 
 2. Straight away, run `proqu wait <id>` with the Bash tool's `run_in_background` set. You are woken when the job ends, with its outcome and the end of its log. Do not poll `status` in a loop or sleep, the background wait does that for you.
 
-   `proqu wait` exits 0 when the job succeeded and 1 for any other outcome, so a failed or killed job shows up as a failed background command. That is normal, read its output. `proqu wait ID --timeout 30m` stops waiting after that long and exits 3 with the job still going, so run the wait again.
+   `proqu wait` exits 0 when the job succeeded and 1 for any other outcome, so a failed or killed job shows up as a failed background command. That is normal, read its output. `proqu wait ID --timeout 30m` stops waiting after that long and exits 3 with the job still going. Exit 4 means the job is still queued but the queue config is broken, so tell the user. Exit 130 or 143 means the wait itself was stopped. After 3, 4, 130 or 143 the job has not ended, so run the wait again.
 
 3. Carry on with other work, or end your turn. If you end a turn with a job nobody waits on, you are asked to start a wait or cancel it.
 
