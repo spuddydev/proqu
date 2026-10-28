@@ -1,3 +1,5 @@
+import json
+
 import pytest
 
 from proqu import config, paths
@@ -44,6 +46,10 @@ def test_set_value(key, text, stored):
         ("vram", "25G", "can only be lowered"),
         ("bid_budget", "-1", "negative"),
         ("aging_per_minute", "fast", "number"),
+        ("aging_per_minute", "nan", "number"),
+        ("aging_per_minute", "inf", "number"),
+        ("cpus", "\u0662", "whole number"),
+        ("cpus", "1_0", "whole number"),
         ("colour", "red", "unknown config key"),
     ],
 )
@@ -108,3 +114,63 @@ def test_relative_xdg_is_ignored(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_STATE_HOME", "relative/dir")
     monkeypatch.setenv("HOME", str(tmp_path))
     assert paths.state_dir() == tmp_path / ".local" / "state" / "proqu"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        {"ram": "12G"},
+        {"cpus": 0},
+        {"cpus": True},
+        {"gpus": "0"},
+        {"bid_budget": -5},
+        {"aging_per_minute": "fast"},
+        {"kill_grace": 0.5},
+    ],
+)
+def test_bad_values_in_the_file_are_refused(tmp_path, bad):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(bad))
+    with pytest.raises(ValueError, match=f"bad value for {next(iter(bad))}"):
+        config.load(path)
+
+
+def test_file_that_is_not_an_object_is_refused(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text("[1, 2]")
+    with pytest.raises(ValueError, match="not valid JSON"):
+        config.load(path)
+
+
+def test_unknown_keys_are_ignored(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text('{"later": "x"}')
+    assert config.load(path) == {"later": "x"}
+
+
+def test_settings_read_the_config():
+    assert config.settings({"bid_budget": 5, "aging_per_minute": 1.5, "kill_grace": 3}) == (
+        config.Settings(bid_budget=5, aging_per_minute=1.5, kill_grace=3)
+    )
+
+
+def test_effective_limits_with_no_gpus_allowed():
+    assert config.effective_limits(MACHINE, {"gpus": []}).gpus == ()
+
+
+def test_vram_limit_never_raises_a_smaller_gpu():
+    gpus = config.effective_limits(MACHINE, {"vram": 20 * G}).gpus
+    assert [gpu.vram for gpu in gpus] == [20 * G, 12 * G]
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "shown"),
+    [
+        ("ram", 8 * G, "8.0G"),
+        ("kill_grace", 90, "1m30s"),
+        ("gpus", [], "none"),
+        ("gpus", [0, 1], "0,1"),
+    ],
+)
+def test_describe(key, value, shown):
+    assert config.describe(key, value) == shown

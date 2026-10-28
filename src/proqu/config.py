@@ -1,7 +1,9 @@
 """User configuration. Resource limits may only lower what the machine has."""
 
 import json
+import math
 import os
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -37,7 +39,26 @@ def load(path: Path) -> dict:
         config = None
     if not isinstance(config, dict):
         raise ValueError(f"config file {path} is not valid JSON, fix or delete it")
+    for key, value in config.items():
+        if key in DESCRIPTIONS and not _valid(key, value):
+            raise ValueError(
+                f"config file {path} has a bad value for {key}, run `proqu config unset {key}`"
+            )
     return config
+
+
+def _valid(key: str, value) -> bool:
+    """Whether a value read back from the config file has the right shape."""
+    whole = isinstance(value, int) and not isinstance(value, bool)
+    if key in ("ram", "vram", "cpus", "kill_grace"):
+        return whole and value >= 1
+    if key == "bid_budget":
+        return whole and value >= 0
+    if key == "gpus":
+        return isinstance(value, list) and all(
+            isinstance(i, int) and not isinstance(i, bool) for i in value
+        )
+    return isinstance(value, (int, float)) and math.isfinite(value) and value >= 0
 
 
 def save(path: Path, config: dict) -> None:
@@ -103,9 +124,11 @@ def _parse(key: str, text: str, machine: Machine):
         return value
     if key == "aging_per_minute":
         try:
-            value = float(text)
+            value = float(text) if text.strip().isascii() else math.nan
         except ValueError:
-            raise ValueError("aging_per_minute must be a number") from None
+            value = math.nan
+        if not math.isfinite(value):
+            raise ValueError("aging_per_minute must be a number")
         if value < 0:
             raise ValueError("aging_per_minute cannot be negative")
         return value
@@ -113,10 +136,9 @@ def _parse(key: str, text: str, machine: Machine):
 
 
 def _int(key: str, text: str) -> int:
-    try:
-        return int(text.strip())
-    except ValueError:
-        raise ValueError(f"{key} must be a whole number") from None
+    if not re.fullmatch(r"-?[0-9]{1,12}", text.strip()):
+        raise ValueError(f"{key} must be a whole number")
+    return int(text.strip())
 
 
 def effective_limits(machine: Machine, config: dict) -> Machine:
