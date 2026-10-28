@@ -1,5 +1,6 @@
 import itertools
 import os
+import re
 import time
 from types import SimpleNamespace
 
@@ -227,7 +228,9 @@ def test_status_shows_places_of_queued_jobs(home, frozen, capsys, monkeypatch):
     detail = capsys.readouterr().out
     assert "state: queued for 0s, position 3 in the queue, expected to start in 2m" in detail
     for text in (out, detail):
-        assert theirs.id not in text and "theirs" not in text and "77" not in text
+        # ids are hex, so a bare 77 can only be the other session's bid
+        assert theirs.id not in text and "theirs" not in text
+        assert not re.search(r"\b77\b", text)
     assert first.id in out
 
 
