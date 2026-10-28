@@ -9,6 +9,7 @@ Contract with the caller:
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -93,3 +94,72 @@ def order(queued: Iterable[Queued], aging_per_minute: float) -> list[Queued]:
         queued,
         key=lambda q: (aging_per_minute * q.submitted_at - q.bid * 60, q.submitted_at, q.id),
     )
+
+
+_Held = tuple[Request, tuple[int, ...], tuple[int, ...]]
+
+
+class _Pool:
+    """Free resources: ram, cpu ids and vram per GPU index."""
+
+    def __init__(self, limits: Limits, held: Iterable[_Held] = ()):
+        self.allowed = frozenset(limits.cpu_ids)
+        self.ram = limits.ram
+        self.cpus = set(limits.cpu_ids)
+        self.vram = {g.index: g.vram for g in limits.gpus}
+        for h in held:
+            self.take(*h)
+
+    def copy(self) -> _Pool:
+        new = copy.copy(self)
+        new.cpus, new.vram = set(self.cpus), dict(self.vram)
+        return new
+
+    def take(self, req: Request, cpu_ids: tuple[int, ...], gpu_ids: tuple[int, ...]) -> None:
+        # Ids outside the limits belong to jobs started before the limits were lowered.
+        self.ram -= req.ram
+        self.cpus -= set(cpu_ids)
+        for g in gpu_ids:
+            if g in self.vram:
+                self.vram[g] -= req.vram
+
+    def give(self, req: Request, cpu_ids: tuple[int, ...], gpu_ids: tuple[int, ...]) -> None:
+        self.ram += req.ram
+        self.cpus |= self.allowed.intersection(cpu_ids)
+        for g in gpu_ids:
+            if g in self.vram:
+                self.vram[g] += req.vram
+
+    def fit(self, req: Request) -> tuple[tuple[int, ...], tuple[int, ...]] | None:
+        """The cpu ids and GPU indices the request would get now, or None."""
+        if req.ram > self.ram or req.cpus > len(self.cpus):
+            return None
+        # Best fit: the GPUs with the least free vram that still hold the request.
+        free = sorted((v, g) for g, v in self.vram.items() if v >= req.vram)
+        if len(free) < req.gpus:
+            return None
+        cpu_ids = tuple(sorted(self.cpus)[: req.cpus])
+        gpu_ids = tuple(sorted(g for _, g in free[: req.gpus]))
+        return cpu_ids, gpu_ids
+
+
+def plan(
+    limits: Limits,
+    running: Iterable[Running],
+    queued: Iterable[Queued],
+    dep_states: dict[str, str],
+    now: float,
+    aging_per_minute: float,
+) -> Plan:
+    """Which queued jobs start now and which fail."""
+    running = list(running)
+    ordered = order(queued, aging_per_minute)
+    pool = _Pool(limits, [(r.req, r.cpu_ids, r.gpu_ids) for r in running])
+    starts = []
+    for q in ordered:
+        fit = pool.fit(q.req)
+        if fit is None:
+            continue
+        pool.take(q.req, *fit)
+        starts.append(Start(q.id, *fit))
+    return Plan(starts, [])
