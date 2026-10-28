@@ -277,6 +277,60 @@ def cmd_cancel(args, command: list[str]) -> int:
     return 0
 
 
+# limits and config
+
+
+def cmd_limits(args, command: list[str]) -> int:
+    detected = machine.snapshot(refresh=True)
+    current = load_config()
+    limits = config.effective_limits(detected, current)
+    settings = config.settings(current)
+    print("What the queue may use on this machine:")
+    print(f"  RAM: {format_size(limits.ram)}" + _of(limits.ram, detected.ram, format_size))
+    print(f"  CPUs: {len(limits.cpu_ids)}" + _of(len(limits.cpu_ids), len(detected.cpu_ids), str))
+    if limits.gpus:
+        for gpu in limits.gpus:
+            print(f"  GPU {gpu.index}: {format_size(gpu.vram)} memory")
+    else:
+        print("  GPUs: none")
+    print(f"Each session may bid up to {settings.bid_budget} points in total.")
+    print(f"Every queued job gains {settings.aging_per_minute:g} priority points per minute.")
+    return 0
+
+
+def _of(limit, total, show) -> str:
+    return f" (of {show(total)}, lowered in config)" if limit < total else ""
+
+
+def cmd_config(args, command: list[str]) -> int:
+    path = paths.config_path()
+    if args.action == "show":
+        current = load_config()
+        for key, description in config.DESCRIPTIONS.items():
+            value = current.get(key, config.DEFAULTS.get(key))
+            shown = "machine default" if value is None else config.describe(key, value)
+            print(f"{key} = {shown}    # {description}")
+        return 0
+    if not args.key:
+        raise invalid(f"config {args.action} needs a key")
+    if args.action == "set" and args.value is None:
+        raise invalid("config set needs a value")
+    detected = machine.snapshot()
+    store = Store()
+    with store.locked():
+        current = load_config()
+        try:
+            if args.action == "set":
+                updated = config.set_value(current, args.key, args.value, detected)
+            else:
+                updated = config.unset(current, args.key)
+        except ValueError as error:
+            raise invalid(str(error)) from None
+        config.save(path, updated)
+    print("Saved. Run `proqu limits` to see what the queue may use now.")
+    return 0
+
+
 # entry point
 
 
@@ -320,6 +374,15 @@ def build_parser() -> argparse.ArgumentParser:
     cancel = commands.add_parser("cancel", help="cancel one of this session's jobs")
     cancel.add_argument("id")
     cancel.set_defaults(handler=cmd_cancel)
+
+    limits = commands.add_parser("limits", help="show what the queue may use on this machine")
+    limits.set_defaults(handler=cmd_limits)
+
+    configure = commands.add_parser("config", help="show or lower the queue limits and settings")
+    configure.add_argument("action", nargs="?", default="show", choices=["show", "set", "unset"])
+    configure.add_argument("key", nargs="?")
+    configure.add_argument("value", nargs="?")
+    configure.set_defaults(handler=cmd_config)
     return parser
 
 
