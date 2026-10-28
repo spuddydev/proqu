@@ -197,14 +197,41 @@ def test_stop_reports_finished_outcomes_once(home, capsys):
 
 
 def test_stop_for_unwatched_jobs_marks_nothing(home, capsys):
-    add("queued")
+    queued = add("queued")
+    _, output, _ = hook("stop", {"session_id": SESSION}, capsys)
+    assert output["decision"] == "block"
+    assert not notified(queued.id)
+
+
+def test_stop_lists_unwatched_and_finished_together(home, capsys):
+    queued = add("queued")
     done = add("succeeded")
+    _, output, _ = hook("stop", {"session_id": SESSION}, capsys)
+    reason = output["reason"]
+    assert "jobs of this session are not being waited on:" in reason
+    assert "jobs of this session finished and are not yet reported:" in reason
+    assert queued.id in reason
+    assert done.id in reason
+
+
+def test_outcomes_are_claimed_oldest_first(home, capsys):
+    jobs = [add("succeeded") for _ in range(hooks.SHOWN + 2)]
     store = Store()
     with store.locked():
-        store.update(done.id, notified=True)
+        for number, job in enumerate(reversed(jobs)):
+            store.update(job.id, ended_at=1000.0 + number)
     store.close()
-    hook("stop", {"session_id": SESSION}, capsys)
-    assert notified(done.id)
+    hook("prompt", {"session_id": SESSION}, capsys)
+    # the last two added ended first in reverse, so the newest two are left
+    assert [notified(job.id) for job in jobs] == [False, False] + [True] * hooks.SHOWN
+
+
+def test_session_start_counts_the_outcomes_it_leaves(home, capsys, monkeypatch):
+    monkeypatch.setenv("CLAUDE_ENV_FILE", str(home / "env.sh"))
+    for _ in range(hooks.SHOWN + 3):
+        add("succeeded")
+    _, output, _ = hook("session-start", {"session_id": SESSION}, capsys)
+    assert "and 3 more, see `proqu status`" in context(output)
 
 
 # never break the session
