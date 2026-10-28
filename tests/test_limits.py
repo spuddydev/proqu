@@ -205,10 +205,12 @@ def test_peak_of_a_job_shorter_than_one_poll_is_recorded(home):
     code = "x = bytearray(80 * 1024 * 1024)\nx[::4096] = b'a' * len(x[::4096])\n"
     job = starting_job([sys.executable, "-c", code], ram=500 * M)
     # a fresh process, so the peak of earlier test jobs is not inherited
-    subprocess.run(
-        [sys.executable, "-c", f"from proqu.runner import supervise; supervise('{job.id}')"],
-        check=True,
+    script = (
+        "from proqu import limits, runner\n"
+        "limits.cgroups_available = lambda: False\n"
+        f"runner.supervise('{job.id}')\n"
     )
+    subprocess.run([sys.executable, "-c", script], check=True)
     done = ended(job)
     assert done.state == "succeeded"
     assert 80 * M < done.peak_ram < 500 * M
