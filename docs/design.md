@@ -97,7 +97,7 @@ It is deferred. What counts as long, how big the share is and whether it is a co
 
 The limits are there to catch an honest agent that got an estimate wrong. They are not a sandbox. A job that wants to escape can:
 
-- leave the job's session with `setsid` and clear its environment. The supervisor finds a job's processes by session and by the job id in their environment, so a process that has done both is no longer seen
+- leave the job's session with `setsid` and clear its environment. In watch mode the supervisor finds a job's processes by session and by the job id in their environment, so a process that has done both is no longer seen. In cgroup mode it stays in the scope, so it still counts against the cap and is killed when the job ends. GPU checks use the same lookup, so it escapes them in both modes
 - call `systemd-run` itself and start work outside the job's scope
 - in watch mode, hold memory in tmpfs or shared memory, which is not counted against the process
 
@@ -105,7 +105,9 @@ Do not run proqu as a security boundary against code you do not trust.
 
 ## Watch mode samples once a second
 
-In watch mode RAM is read once a second. A spike that rises and falls between two samples is not seen. A fast allocation can also overshoot the limit before the next sample ends it. Cgroup mode does not have this problem, because the kernel enforces the cap. Cgroup mode is preferred, and `proqu limits` says which one is in use.
+In watch mode RAM is read once a second. A spike that rises and falls between two samples is not seen. A fast allocation can also overshoot the limit before the next sample ends it. Cgroup mode does not have this problem, because the kernel enforces the cap.
+
+CPU is not capped in watch mode. Each job is only pinned to its cores, and a job can move itself onto cores given to others. Cgroup mode adds a CPU quota. Cgroup mode is preferred, and `proqu limits` says which one is in use.
 
 Memory is summed as proportional set size, so a page shared between processes counts once.
 
