@@ -49,7 +49,7 @@ def test_valid_submit_queues_a_job(home, capsys, monkeypatch):
         (["--vram", ""], "--vram: cannot read size"),
         (["--est", "5"], "--est: cannot read duration"),
         (["--cwd", ""], "--cwd is empty"),
-        (["--cwd", "/etc/hostname"], "is not a directory"),
+        (["--cwd", __file__], "is not a directory"),
         (["--name", "two\nlines"], "printable characters"),
         (["--name", "x" * 65], "printable characters"),
         (["--est", "10m"], "longer than --max"),
