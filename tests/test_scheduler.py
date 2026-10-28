@@ -335,3 +335,46 @@ def test_order_uses_the_aging_rate_it_is_given():
     assert ids(order(OLD_AND_BIDDING, 0)) == ["rich", "old"]
     assert ids(order(OLD_AND_BIDDING, 10)) == ["old", "rich"]
     assert ids(order(OLD_AND_BIDDING, 20)) == ["old", "rich"]
+
+
+# Reservation details
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_the_reservation_waits_until_enough_jobs_have_ended(reverse):
+    # The first release leaves 6G, which is not enough, so the reservation is at 200.
+    running = [r("r1", 2, mx=100), r("r2", 2, mx=200, cpu_ids=(1,))]
+    if reverse:
+        running.reverse()
+    queue = [q("big", 8, t=1), q("s", 4, t=2, mx=150)]
+    assert started(run(L8, running, queue)) == ["s"]
+
+
+def test_a_job_started_in_this_pass_holds_resources_until_its_hard_end():
+    queue = [q("a", 2, t=1, mx=100), q("big", 8, t=2), q("long", 2, t=3, mx=1000)]
+    assert started(run(L8, [], queue)) == ["a"]
+
+
+def test_a_job_started_in_this_pass_is_released_at_its_maximum_not_its_estimate():
+    queue = [q("a", 2, t=1, est=10, mx=100), q("big", 8, t=2), q("s", 2, t=3, mx=50)]
+    assert started(run(L8, [], queue)) == ["a", "s"]
+
+
+def test_only_the_first_blocked_job_reserves():
+    # big1 reserves at 300. big2 alone could start at 100, but does not hold a reservation.
+    running = [r("r1", 2, mx=100), r("r2", 2, mx=300, cpu_ids=(1,))]
+    queue = [q("big1", 8, t=1), q("big2", 5, t=2), q("s", 2, t=3, mx=200)]
+    assert started(run(L8, running, queue)) == ["s"]
+
+
+def test_a_refused_backfill_does_not_use_up_the_shadow():
+    # 6G is reserved at 100, leaving 2G. The 3G job is refused, so the 2G job still fits.
+    queue = [q("big", 6, t=1), q("s3", 3, t=2, mx=1000), q("s2", 2, t=3, mx=1000)]
+    assert started(run(L8, [r("r4", 4, mx=100)], queue)) == ["s2"]
+
+
+def test_a_reservation_blocked_only_by_cpu_count_is_kept():
+    running = [r("r6", cpu_ids=(0, 1, 2, 3, 4, 5), mx=100)]
+    big = q("big", cpus=7, t=1)
+    assert started(run(L8, running, [big, q("s", cpus=2, t=2, mx=1000)])) == []
+    assert started(run(L8, running, [big, q("s", cpus=2, t=2, mx=100)])) == ["s"]
