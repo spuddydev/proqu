@@ -338,7 +338,6 @@ def test_set_length_delay_cap(text, stored):
     assert config.set_value({}, "length_delay_cap", text, MACHINE) == {"length_delay_cap": stored}
 
 
-@pytest.mark.parametrize("text", ["0", "0s"])
 @pytest.mark.parametrize("text", ["0G", "0B", "0.0M"])
 def test_set_reserve_ram_accepts_zero_with_a_unit(text):
     assert config.set_value({}, "reserve_ram", text, MACHINE) == {"reserve_ram": 0}
@@ -349,6 +348,7 @@ def test_set_length_delay_cap_accepts_zero_with_a_unit(text):
     assert config.set_value({}, "length_delay_cap", text, MACHINE) == {"length_delay_cap": 0}
 
 
+@pytest.mark.parametrize("text", ["0", "0s"])
 def test_set_kill_grace_refuses_zero(text):
     with pytest.raises(ValueError, match="more than zero"):
         config.set_value({}, "kill_grace", text, MACHINE)
