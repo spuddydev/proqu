@@ -403,3 +403,58 @@ def test_a_running_cpu_outside_the_limits_is_not_given_back_as_free():
     big = q("big", cpus=2, t=1)
     assert started(run(TWO_CPUS, running, [big, q("s", t=2, mx=1000)])) == []
     assert started(run(TWO_CPUS, running, [big, q("s", t=2, mx=100)])) == ["s"]
+
+
+# Projection details
+
+
+def test_projection_starts_at_the_earliest_expected_end():
+    running = [r("r1", 4, est=50, mx=120), r("r2", 4, est=100, mx=120, cpu_ids=(1,))]
+    assert proj(L8, running, [q("a", 4, est=10)]) == {"a": (1, 50, 60)}
+
+
+def test_a_running_estimate_above_the_hard_end_is_capped_at_the_hard_end():
+    running = [r("o", 8, est=500, mx=100)]
+    assert proj(L8, running, [q("a", 8, est=30)]) == {"a": (1, 100, 130)}
+
+
+def test_projection_waits_for_gpu_vram():
+    running = [r("g", gpu_ids=(0,), vram=20, est=50, mx=100)]
+    queue = [q("g1", gpus=1, vram=10, t=1, est=100), q("g2", gpus=1, vram=10, t=2, est=5)]
+    assert proj(GPUS, running, queue) == {"g1": (1, 0, 100), "g2": (2, 50, 55)}
+
+
+def test_a_projected_gpu_job_holds_its_gpu():
+    # The running job ends at 20, a replay step during which a is still running.
+    running = [r("r1", est=20)]
+    queue = [q("a", gpus=1, vram=24, t=1, est=100), q("b", gpus=1, vram=24, t=2, est=10)]
+    assert proj(GPUS, running, queue) == {"a": (1, 0, 100), "b": (2, 100, 110)}
+
+
+def test_a_projected_job_holds_its_cpus():
+    # When the running job ends at 20 only cpu 0 is free, as a holds the rest.
+    running = [r("r1", est=20)]
+    queue = [q("a", cpus=7, t=1, est=100), q("b", cpus=2, t=2, est=10)]
+    assert proj(L8, running, queue) == {"a": (1, 0, 100), "b": (2, 100, 110)}
+
+
+def long_hard_end_scenario(backfill_max):
+    # a starts at once and s could start when r1 ends at 20. big is blocked until a's hard
+    # end at 100.
+    running = [r("r1", 4, est=20, mx=20)]
+    queue = [
+        q("a", 4, t=1, est=30, mx=100),
+        q("big", 8, t=2, est=10, mx=10),
+        q("s", 4, t=3, est=10, mx=backfill_max),
+    ]
+    return proj(L8, running, queue)
+
+
+def test_a_projected_job_reserves_until_its_hard_end_not_its_estimate():
+    # s ends at 70, before big could start at a's hard end of 100.
+    assert long_hard_end_scenario(50) == {"a": (1, 0, 30), "big": (2, 30, 40), "s": (3, 20, 30)}
+
+
+def test_projection_checks_backfill_against_the_time_of_the_replay_step():
+    # At 20, s would end at 110 which is past 100, though 90 from now is not.
+    assert long_hard_end_scenario(90) == {"a": (1, 0, 30), "big": (2, 30, 40), "s": (3, 40, 50)}
