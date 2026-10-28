@@ -272,7 +272,7 @@ def project(
     doomed = _doomed(limits, live, ordered, dep_states)
     waiting = {q.id: q for q in ordered if q.id not in doomed}
     states = dict(dep_states)
-    # A job past its estimate is expected to end now, and never after its hard end.
+    # A job ends at the earlier of its estimate and hard end, or now if that has passed.
     ends = {r.id: max(now, min(r.started_at + r.max, r.started_at + r.est)) for r in running}
     out = {}
     t = now
