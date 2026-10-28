@@ -31,6 +31,7 @@ A shared compute queue that lets coding agents submit heavy jobs and share a mac
 - Priority is the bid plus 10 points per minute waited, for every job. No bid counts as 0. A job counts as submitted later by a tenth of its maximum runtime, capped at 4 hours by default. With no bids and equal maximum runtimes this is plain first in first out.
 - Each session has a bid budget, 11000 by default and configurable.
 - Jobs start in priority order. A later job may start ahead only if it fits and its maximum runtime ends before the reserved start of the first blocked job (backfill), so large jobs are not starved.
+- A job also starts only when it fits the memory free right now, less what running jobs may still grow into. This covers RAM and GPU memory used by other programs. It only ever delays a start, and status says when a job waits for it.
 
 ### Visibility
 

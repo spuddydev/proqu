@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from proqu import cli, machine, paths, procs, scheduler, tick
+from proqu import cli, limits, machine, paths, procs, scheduler, tick
 from proqu.cli import main
 from proqu.store import Store
 
@@ -389,3 +389,101 @@ def test_a_queued_job_failed_by_a_config_limit_keeps_the_old_wording(queue, monk
     main(["config", "set", "ram", "2G"])
     real()
     assert "lowered after it was submitted" in Store().get(job.id).reason
+
+
+# Free memory
+
+
+def test_job_waits_while_other_programs_use_the_memory(queue, monkeypatch):
+    monkeypatch.setattr(machine, "free_ram", lambda: G // 2)
+    job = submit(command=("true",))
+    assert Store().get(job.id).state == "queued"
+    assert tick.tick() == {job.id: "ram"}
+    monkeypatch.setattr(machine, "free_ram", lambda: 3 * G)
+    assert tick.tick() == {}
+    assert settle([job.id])[0].state == "succeeded"
+
+
+def test_status_and_submit_say_a_job_waits_for_memory(queue, monkeypatch, capsys):
+    monkeypatch.setattr(machine, "free_ram", lambda: G // 2)
+    job = submit(command=("true",))
+    assert "waiting for memory other programs are using" in capsys.readouterr().out
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert f"{job.id}: queued" in out
+    assert "waiting for memory other programs are using" in out
+    assert "uncertain" in out
+
+
+def test_only_memory_other_programs_use_makes_projections_uncertain(queue, monkeypatch):
+    monkeypatch.setattr(tick, "tick", lambda store=None, cached_only=False: {})
+    first, second = submit(), submit()
+    store, now = Store(), time.time()
+    places = cli.queue_outlook(store, now, {first.id: "gpu-unread"})
+    assert not places[second.id].uncertain
+    assert cli.queue_outlook(store, now, {first.id: "ram"})[second.id].uncertain
+
+
+def test_running_jobs_keep_the_memory_they_may_still_use(queue, monkeypatch):
+    # the sleeping job uses almost none of its 2G, but may grow into all of it
+    first = submit("--ram", "2G", command=("sleep", "30"))
+    monkeypatch.setattr(machine, "free_ram", lambda: 2 * G + G // 2)
+    second = submit(command=("true",))
+    assert Store().get(second.id).state == "queued"
+    assert tick.tick() == {second.id: "ram"}
+    main(["cancel", first.id])
+    settle([first.id])
+
+
+def test_passes_inside_a_job_never_read_free_memory(queue, monkeypatch):
+    def unread():
+        raise AssertionError("free memory read inside a job")
+
+    monkeypatch.setattr(machine, "free_ram", unread)
+    monkeypatch.setenv("PROQU_JOB_ID", "outer1")
+    submit(command=("true",))
+
+
+def test_running_gpu_jobs_keep_the_gpu_memory_they_may_still_use(queue, monkeypatch):
+    gpu = machine.Machine(ram=4 * G, cpu_ids=CPUS, gpus=(machine.GpuInfo(0, "GPU-a", 8 * G),))
+    monkeypatch.setattr(machine, "snapshot", lambda refresh=False: gpu)
+    monkeypatch.setattr(limits, "gpu_apps", lambda: [])
+    monkeypatch.setattr(machine, "free_vram", lambda: {0: 8 * G})
+    first = submit("--gpus", "1", "--vram", "4G", command=("sleep", "30"))
+    assert Store().get(first.id).state in ("starting", "running")
+    # the first job uses none of its 4G yet, but may grow into all of it
+    monkeypatch.setattr(machine, "free_vram", lambda: {0: 6 * G})
+    second = submit("--gpus", "1", "--vram", "3G", command=("true",))
+    assert tick.tick() == {second.id: "gpu"}
+    main(["cancel", first.id])
+    settle([first.id])
+
+
+def test_wait_says_a_job_waits_for_memory(queue, quick, monkeypatch, capsys):
+    monkeypatch.setattr(machine, "free_ram", lambda: G // 2)
+    job = submit(command=("true",))
+    capsys.readouterr()
+    assert main(["wait", job.id, "--timeout", "1s"]) == 3
+    assert "waiting for memory other programs are using" in capsys.readouterr().out
+
+
+def test_gpu_memory_is_checked_when_free_ram_cannot_be_read(queue, monkeypatch):
+    gpu = machine.Machine(ram=4 * G, cpu_ids=CPUS, gpus=(machine.GpuInfo(0, "GPU-a", 8 * G),))
+    monkeypatch.setattr(machine, "snapshot", lambda refresh=False: gpu)
+    monkeypatch.setattr(machine, "free_ram", lambda: None)
+    monkeypatch.setattr(machine, "free_vram", lambda: {0: 0})
+    job = submit("--gpus", "1", "--vram", "1G", command=("true",))
+    assert tick.tick() == {job.id: "gpu"}
+    assert Store().get(job.id).state == "queued"
+
+
+def test_hook_passes_never_start_gpu_jobs(queue, monkeypatch):
+    gpu = machine.Machine(ram=4 * G, cpu_ids=CPUS, gpus=(machine.GpuInfo(0, "GPU-a", 8 * G),))
+    monkeypatch.setattr(machine, "snapshot", lambda refresh=False: gpu)
+    monkeypatch.setattr(machine, "cached", lambda: gpu)
+    monkeypatch.setattr(machine, "free_vram", lambda: {0: 8 * G})
+    monkeypatch.setenv("PROQU_JOB_ID", "outer1")
+    job = submit("--gpus", "1", "--vram", "1G", command=("true",))
+    monkeypatch.delenv("PROQU_JOB_ID")
+    assert tick.tick(cached_only=True) == {job.id: "gpu-unread"}
+    assert Store().get(job.id).state == "queued"
