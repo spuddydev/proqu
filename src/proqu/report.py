@@ -1,6 +1,8 @@
 """What the agent is told about its jobs: queue outlook, outcomes and log tails."""
 
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from proqu import scheduler
 from proqu import tick as ticking
@@ -58,3 +60,31 @@ def describe_place(place: Place, now: float) -> str:
 def _from_now(at: float, now: float) -> str:
     # a job that fits now is started by the next pass
     return "shortly" if at - now < 1 else f"in {format_duration(at - now)}"
+
+
+# how much of the end of a log is read for a tail
+TAIL_BYTES = 256 * 1024
+
+
+def tail_lines(path: Path, count: int) -> list[str] | None:
+    """The last count lines of a log, or None when there is no log yet.
+
+    Only the end of the file is read, so a huge log stays cheap. Progress bars
+    redraw a line with carriage returns, so only the last drawing of each is kept.
+    """
+    try:
+        with open(path, "rb") as handle:
+            size = handle.seek(0, os.SEEK_END)
+            start = max(0, size - TAIL_BYTES)
+            handle.seek(start)
+            data = handle.read()
+    except FileNotFoundError:
+        return None
+    lines = data.decode(errors="replace").split("\n")
+    if start and len(lines) > 1:
+        # the read began mid line
+        lines = lines[1:]
+    if lines[-1] == "":
+        lines.pop()
+    lines = [line.rstrip("\r").rsplit("\r", 1)[-1] for line in lines]
+    return lines[-count:]

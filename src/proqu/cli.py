@@ -357,6 +357,39 @@ def cmd_cancel(args, command: list[str]) -> int:
     return 0
 
 
+# logs
+
+
+def cmd_logs(args, command: list[str]) -> int:
+    if args.tail < 0:
+        raise invalid("--tail cannot be negative, use 0 for the whole log")
+    job = own_job(Store(), args.id)
+    path = paths.log_path(job.id)
+    if args.tail:
+        lines = report.tail_lines(path, args.tail) or []
+        for line in lines:
+            print(line)
+        wrote = bool(lines)
+    else:
+        wrote = copy_log(path)
+    if not wrote:
+        print(f"No output from job {job.id} so far (state: {job.state}).")
+    return 0
+
+
+def copy_log(path) -> bool:
+    """Write a whole log out, returning whether it held anything."""
+    wrote = False
+    try:
+        with open(path, encoding="utf-8", errors="replace", newline="") as log:
+            while chunk := log.read(1 << 16):
+                sys.stdout.write(chunk)
+                wrote = True
+    except FileNotFoundError:
+        pass
+    return wrote
+
+
 # limits and config
 
 
@@ -473,6 +506,13 @@ def build_parser() -> argparse.ArgumentParser:
     cancel = commands.add_parser("cancel", help="cancel one of this session's jobs")
     cancel.add_argument("id", help="the job id from submit or status")
     cancel.set_defaults(handler=cmd_cancel)
+
+    logs = commands.add_parser("logs", help="show the output of one of this session's jobs")
+    logs.add_argument("id", help="the job id from submit or status")
+    logs.add_argument(
+        "--tail", type=int, default=200, metavar="N", help="last N lines (default 200, 0 for all)"
+    )
+    logs.set_defaults(handler=cmd_logs)
 
     limits = commands.add_parser("limits", help="show what the queue may use on this machine")
     limits.set_defaults(handler=cmd_limits)
