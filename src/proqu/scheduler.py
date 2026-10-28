@@ -13,6 +13,8 @@ import copy
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from proqu.units import format_size
+
 
 @dataclass(frozen=True)
 class Gpu:
@@ -144,15 +146,20 @@ class _Pool:
 
 
 def _over_limits(req: Request, limits: Limits) -> str | None:
+    # only reachable when the limits were lowered after the job was submitted
+    lowered = "the queue limits were lowered after it was submitted"
     if req.ram > limits.ram:
-        return f"needs ram {req.ram}, limit is {limits.ram}"
+        return f"needs {format_size(req.ram)} RAM but {lowered} to {format_size(limits.ram)}"
     if req.cpus > len(limits.cpu_ids):
-        return f"needs {req.cpus} cpus, limit is {len(limits.cpu_ids)}"
+        return f"needs {req.cpus} CPUs but {lowered} to {len(limits.cpu_ids)}"
     if req.gpus > len(limits.gpus):
-        return f"needs {req.gpus} gpus, limit is {len(limits.gpus)}"
+        return f"needs {req.gpus} GPUs but {lowered} to {len(limits.gpus)}"
     have = sum(g.vram >= req.vram for g in limits.gpus)
     if req.gpus > have:
-        return f"needs {req.gpus} gpus with vram {req.vram}, only {have} have that much"
+        return (
+            f"needs {req.gpus} GPUs with {format_size(req.vram)} each but {lowered}, "
+            f"only {have} allow that much"
+        )
     return None
 
 
@@ -165,7 +172,8 @@ def _doomed(
         for dep in q.after:
             state = dep_states.get(dep, "unknown")
             if dep not in live and state != "succeeded":
-                reasons[q.id] = f"dependency {dep} {state}"
+                ended = "does not exist" if state == "unknown" else f"ended {state}"
+                reasons[q.id] = f"job {dep}, which it waits for, {ended}"
                 break
         else:
             reason = _over_limits(q.req, limits)
@@ -178,7 +186,7 @@ def _doomed(
         for q in ordered:
             dep = next((d for d in q.after if d in reasons), None)
             if q.id not in reasons and dep:
-                reasons[q.id] = f"dependency {dep} failed"
+                reasons[q.id] = f"job {dep}, which it waits for, can never start"
                 changed = True
     return reasons
 

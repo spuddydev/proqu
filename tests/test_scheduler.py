@@ -192,29 +192,46 @@ def test_a_succeeded_dependency_unblocks():
 @pytest.mark.parametrize("state", ["failed", "killed", "cancelled"])
 def test_a_dependency_that_did_not_succeed_fails_the_dependant(state):
     p = run(L8, [], [q("x", after=["d"])], {"d": state})
-    assert p == Plan([], [Fail("x", f"dependency d {state}")])
+    assert p == Plan([], [Fail("x", f"job d, which it waits for, ended {state}")])
 
 
 def test_an_unknown_dependency_fails_the_dependant():
-    assert run(L8, [], [q("x", after=["zz"])]).fail == [Fail("x", "dependency zz unknown")]
+    assert run(L8, [], [q("x", after=["zz"])]).fail == [
+        Fail("x", "job zz, which it waits for, does not exist")
+    ]
 
 
 def test_failure_spreads_to_dependants_in_the_same_pass():
     queue = [q("w", 9, t=0), q("y", t=1, after=["x"]), q("x", t=2, after=["w"])]
     assert run(L8, [], queue).fail == [
-        Fail("w", f"needs ram {9 * G}, limit is {8 * G}"),
-        Fail("y", "dependency x failed"),
-        Fail("x", "dependency w failed"),
+        Fail(
+            "w", "needs 9.0G RAM but the queue limits were lowered after it was submitted to 8.0G"
+        ),
+        Fail("y", "job x, which it waits for, can never start"),
+        Fail("x", "job w, which it waits for, can never start"),
     ]
 
 
 @pytest.mark.parametrize(
     ("job", "reason"),
     [
-        (q("x", 9), f"needs ram {9 * G}, limit is {8 * G}"),
-        (q("x", cpus=9), "needs 9 cpus, limit is 8"),
-        (q("x", gpus=3, vram=1), "needs 3 gpus, limit is 2"),
-        (q("x", gpus=2, vram=16), f"needs 2 gpus with vram {16 * G}, only 1 have that much"),
+        (
+            q("x", 9),
+            "needs 9.0G RAM but the queue limits were lowered after it was submitted to 8.0G",
+        ),
+        (
+            q("x", cpus=9),
+            "needs 9 CPUs but the queue limits were lowered after it was submitted to 8",
+        ),
+        (
+            q("x", gpus=3, vram=1),
+            "needs 3 GPUs but the queue limits were lowered after it was submitted to 2",
+        ),
+        (
+            q("x", gpus=2, vram=16),
+            "needs 2 GPUs with 16.0G each but the queue limits were lowered after it was "
+            "submitted, only 1 allow that much",
+        ),
     ],
 )
 def test_a_request_over_the_limits_fails_naming_the_resource(job, reason):
