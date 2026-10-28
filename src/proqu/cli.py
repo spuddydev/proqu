@@ -8,7 +8,7 @@ import sqlite3
 import sys
 import time
 
-from proqu import config, machine, paths
+from proqu import config, machine, paths, report
 from proqu import limits as limits_module
 from proqu import tick as ticking
 from proqu.store import ACTIVE, TERMINAL, Job, LockTimeout, Store, StoreError
@@ -45,6 +45,18 @@ def own_job(store: Store, job_id: str) -> Job:
     if job is None:
         raise ProquError(f"no job {job_id} in this session, see `proqu status` for your jobs")
     return job
+
+
+def queue_outlook(store: Store, now: float) -> dict[str, report.Place]:
+    """Positions and projections of queued jobs, from the limits a pass would use."""
+    current = load_config()
+    limits = ticking.to_limits(config.effective_limits(machine.snapshot(), current))
+    aging = config.settings(current).aging_per_minute
+    return report.outlook(store, current_session(), limits, aging, now)
+
+
+def sentence(text: str) -> str:
+    return text[:1].upper() + text[1:]
 
 
 def describe_request(ram: int, cpus: int, gpus: int, vram: int) -> str:
@@ -135,6 +147,11 @@ def cmd_submit(args, command: list[str]) -> int:
     print(f"estimated {format_duration(est)}, killed at {format_duration(max_time)}.")
     if after:
         print(f"Waits for: {', '.join(after)}.")
+    if now.state == "queued":
+        when = time.time()
+        place = queue_outlook(store, when).get(job.id)
+        if place:
+            print(f"{sentence(report.describe_place(place, when))}.")
     print(
         f"Next: run `proqu wait {job.id}` as a background command so you are woken when it ends. "
         f"Check on it with `proqu status {job.id}`."
