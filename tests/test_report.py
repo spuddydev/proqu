@@ -142,3 +142,8 @@ def test_a_projected_start_that_has_come_reads_as_shortly():
     for start in (now - 30, now, now + 0.5):
         text = report.describe_place(report.Place(1, start, start + 60), now)
         assert text == "position 1 in the queue, expected to start shortly and finish in 1m"
+
+
+def test_outcome_with_only_a_peak_ram():
+    text = report.outcome(ended("failed", "exited", peak_ram=2 * 1024**3), [])
+    assert "\nPeak RAM 2.0G.\n" in text
