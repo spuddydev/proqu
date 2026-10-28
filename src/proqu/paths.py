@@ -3,9 +3,24 @@
 import os
 from pathlib import Path
 
+DB_NAME = "proqu.db"
+
 
 class StateDirError(Exception):
     pass
+
+
+def state_path() -> Path:
+    """Where the state directory is, without creating it."""
+    xdg = os.environ.get("XDG_STATE_HOME", "")
+    try:
+        if os.environ.get("PROQU_HOME"):
+            return Path(os.path.abspath(os.environ["PROQU_HOME"]))
+        if xdg and os.path.isabs(xdg):
+            return Path(xdg) / "proqu"
+        return Path.home() / ".local" / "state" / "proqu"
+    except RuntimeError:
+        raise StateDirError("cannot find a home directory, set PROQU_HOME") from None
 
 
 def state_dir() -> Path:
@@ -14,16 +29,7 @@ def state_dir() -> Path:
     The directory itself is 0700, which keeps every file in it private without
     changing the process umask, so jobs keep the umask the agent gave them.
     """
-    xdg = os.environ.get("XDG_STATE_HOME", "")
-    try:
-        if os.environ.get("PROQU_HOME"):
-            path = Path(os.path.abspath(os.environ["PROQU_HOME"]))
-        elif xdg and os.path.isabs(xdg):
-            path = Path(xdg) / "proqu"
-        else:
-            path = Path.home() / ".local" / "state" / "proqu"
-    except RuntimeError:
-        raise StateDirError("cannot find a home directory, set PROQU_HOME") from None
+    path = state_path()
     try:
         path.mkdir(mode=0o700, parents=True, exist_ok=True)
         info = path.stat()
@@ -38,7 +44,12 @@ def state_dir() -> Path:
 
 
 def db_path() -> Path:
-    return state_dir() / "proqu.db"
+    return state_dir() / DB_NAME
+
+
+def has_db() -> bool:
+    """Whether any job was ever submitted, checked without creating state."""
+    return (state_path() / DB_NAME).exists()
 
 
 def lock_path() -> Path:
