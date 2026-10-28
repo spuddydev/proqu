@@ -88,6 +88,24 @@ def test_each_process_environment_is_read_once_on_macos(macos, monkeypatch):
     assert sorted(reads) == [100, 101, 101]
 
 
+def test_departed_and_unreadable_processes_are_not_kept_on_macos(macos, monkeypatch):
+    uid = os.getuid()
+    listed = [100, 101]
+    readable = {100: [b"PROQU_JOB_ID=job1"]}
+    monkeypatch.setattr(darwin, "pids", lambda: list(listed))
+    monkeypatch.setattr(darwin, "process", lambda pid: (uid, 1, False))
+    monkeypatch.setattr(procs, "session_of", lambda pid: None)
+    monkeypatch.setattr(darwin, "environ", readable.get)
+    assert procs.members_of({"job1": None}) == {"job1": [100]}
+    # an environment that could not be read is asked for again, not taken as empty
+    readable[101] = [b"PROQU_JOB_ID=job1"]
+    assert procs.members_of({"job1": None}) == {"job1": [100, 101]}
+    # a process that has gone is forgotten
+    listed.remove(100)
+    procs.members_of({"job1": None})
+    assert set(procs._job_ids) == {(101, 1)}
+
+
 def test_machine_detection_on_macos(macos, monkeypatch):
     monkeypatch.setattr(darwin, "total_ram", lambda: 32 * G)
     monkeypatch.setattr(darwin, "cpu_count", lambda: 10)
