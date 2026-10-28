@@ -135,7 +135,7 @@ A queued job is cancelled at once and its bid is refunded. A starting or running
 proqu limits
 ```
 
-Shows what the queue may use: RAM, CPUs and GPUs, noting when a figure is below the machine's because of the reserve. It also shows which enforcement mode applies, how much is kept in reserve, the bid budget, the aging rate and the length delay. Run it before submitting. It detects the machine afresh.
+Shows what the queue may use: RAM, CPUs and GPUs, noting when a figure is below the machine's because of the reserve. It also shows which enforcement mode applies, how much is kept in reserve, the bid budget, the aging rate, the length delay and the share long jobs may hold. Run it before submitting. It detects the machine afresh.
 
 ### config
 
@@ -199,6 +199,14 @@ GPU memory works the same way. proqu reads the free memory of each GPU from `nvi
 Free memory is read afresh at each pass that is about to start a job. Nothing is kept back from it, because the reserve already applies to the limits. CPU is not checked this way, since more work than cores only slows things down.
 
 A job held back by this stays queued. It never fails for it. Other programs using the memory is not the job's fault, and the memory may come free.
+
+### Long jobs
+
+A job whose `--max` is over 12 hours is long. Long jobs together may hold at most 75% of the queue's RAM, of its cores and of each GPU's memory. The caps are the limits times the percent, rounded down. With few cores the core cap is small. Two cores at 75% gives 1, so long jobs then run one at a time.
+
+Short jobs are not affected. A long job blocked by the share waits for another long job to end. It is reserved for that time and status projects its start then. A single long job larger than the share still runs, but only when no other long job is running, and no other long job starts meanwhile.
+
+The owner can change this with `long_job_after` and `long_job_share`. `proqu limits` shows both. Changing `long_job_after` reclassifies running jobs at the next pass. It does not stop them. This is separate from the length delay under [Priority](#priority), which only reorders the queue. A queued long job is told at submit that it may wait.
 
 ### Backfill and the reservation
 
@@ -368,6 +376,8 @@ proqu config unset ram
 | `bid_budget` | Bid points each session may spend. | 11000 |
 | `aging_per_minute` | Priority points a queued job gains per minute. | 10 |
 | `length_delay_cap` | Most a long job is delayed in the queue order. `0` for no delay. See [Priority](#priority). | 4h |
+| `long_job_after` | A job with a `--max` over this is long. See [Long jobs](#long-jobs). | 12h |
+| `long_job_share` | Percent of RAM, cores and each GPU's memory long jobs may hold together, a whole number from 1 to 100. `75` and `75%` both work. `100` turns the cap off. | 75% |
 | `kill_grace` | Time between the polite and the forced kill. Must be more than zero. | 10s |
 
 A `ram`, `cpus`, `gpus` or `vram` above what the machine has is refused, and so is a reserve that would leave nothing for jobs. Jobs already running keep what they were given. A queued job that no longer fits fails with a reason that says the limits were lowered. If the reserve alone is what stops it fitting, the reason names the reserve. A job held back only for free memory does not fail. It waits.
