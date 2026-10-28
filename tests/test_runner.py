@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from proqu import procs, runner
+from proqu import machine, procs, runner
 from proqu.store import Job, Store
 
 
@@ -27,7 +27,7 @@ def starting_job(argv, cwd="/", **changes):
         after=[],
         submitted_at=time.time(),
         state="starting",
-        cpu_ids=[sorted(os.sched_getaffinity(0))[0]],
+        cpu_ids=[sorted(machine.available_cpus())[0]],
     )
     values.update(changes)
     job = Job(**values)
@@ -57,7 +57,8 @@ def test_successful_job_runs_in_its_cwd_with_its_env(home, tmp_path):
     assert log_of(job).split() == [str(tmp_path), job.id, "[]"]
 
 
-@pytest.mark.skipif(len(os.sched_getaffinity(0)) < 2, reason="needs two CPUs")
+@pytest.mark.skipif(not hasattr(os, "sched_setaffinity"), reason="needs CPU pinning")
+@pytest.mark.skipif(len(machine.available_cpus()) < 2, reason="needs two CPUs")
 def test_job_is_pinned_to_its_cpus(home):
     cpu = sorted(os.sched_getaffinity(0))[-1]
     job = starting_job(["sh", "-c", "grep Cpus_allowed_list /proc/self/status"], cpu_ids=[cpu])

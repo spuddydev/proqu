@@ -7,6 +7,11 @@ import pytest
 
 from proqu import machine, paths
 
+# macOS has no CPU affinity, so there the CPUs are counted rather than read from it
+AFFINITY = pytest.mark.skipif(
+    not hasattr(os, "sched_getaffinity"), reason="needs CPU affinity, Linux only"
+)
+
 
 def fake_proc(tmp_path, cgroup_line, mem_kib=16 * 1024**2):
     proc = tmp_path / "proc"
@@ -57,11 +62,13 @@ def test_ram_in_private_cgroup_namespace(tmp_path):
     assert machine.detect_ram(proc, root) == 3 * 1024**3
 
 
+@AFFINITY
 def test_cpus_match_affinity(tmp_path):
     proc = fake_proc(tmp_path, "0::/")
     assert machine.detect_cpus(proc, tmp_path / "none") == tuple(sorted(os.sched_getaffinity(0)))
 
 
+@AFFINITY
 def test_cpus_trimmed_by_cgroup_quota(tmp_path):
     proc = fake_proc(tmp_path, "0::/box")
     root = tmp_path / "cg"
@@ -200,6 +207,7 @@ def test_cgroup_v1_reads_only_the_memory_controller(tmp_path):
     assert machine.detect_ram(proc, root) == 2 * 1024**3
 
 
+@AFFINITY
 def test_cpu_quota_trims_a_known_cpu_set(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1, 2, 3, 4, 5, 6, 7})
     proc = fake_proc(tmp_path, "0::/box")
@@ -225,6 +233,7 @@ def test_snapshot_passes_previous_gpus_on(tmp_path, monkeypatch):
     assert seen == [first]
 
 
+@AFFINITY
 def test_cpu_quota_on_cgroup_v1(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1, 2, 3})
     proc = fake_proc(tmp_path, "3:cpu,cpuacct:/box")
@@ -235,6 +244,7 @@ def test_cpu_quota_on_cgroup_v1(tmp_path, monkeypatch):
     assert machine.detect_cpus(proc, tmp_path / "cg") == (0, 1)
 
 
+@AFFINITY
 def test_unlimited_cgroup_v1_cpu_quota(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1})
     proc = fake_proc(tmp_path, "3:cpu,cpuacct:/")

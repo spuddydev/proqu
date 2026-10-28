@@ -13,7 +13,7 @@ from proqu.cli import main
 from proqu.store import Store
 
 G = 1024**3
-CPUS = tuple(sorted(os.sched_getaffinity(0)))[:2]
+CPUS = tuple(sorted(machine.available_cpus()))[:2]
 
 
 @pytest.fixture
