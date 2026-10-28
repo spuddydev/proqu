@@ -76,7 +76,23 @@ def session_start(data: dict, session: str) -> dict | None:
     return _context("SessionStart", lines)
 
 
-HANDLERS = {"session-start": session_start}
+def prompt(data: dict, session: str) -> dict | None:
+    store = _open_store()
+    if store is None:
+        return None
+    try:
+        finished, more = _claim_finished(store, session)
+    finally:
+        store.close()
+    if not finished:
+        return None
+    lines = ["proqu jobs of this session finished since you last heard:"]
+    lines += _listed(finished, more)
+    lines += ["Tell the user these outcomes if they matter to the current work."]
+    return _context("UserPromptSubmit", lines)
+
+
+HANDLERS = {"session-start": session_start, "prompt": prompt}
 
 
 def _open_store() -> Store | None:
