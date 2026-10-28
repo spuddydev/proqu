@@ -92,7 +92,7 @@ def test_session_start_lists_active_and_unreported_jobs(home, capsys, monkeypatc
     text = context(output)
     assert output["hookSpecificOutput"]["hookEventName"] == "SessionStart"
     assert f"- job {running.id} (train): running for 2m" in text
-    assert f"- job {done.id}: failed, exit code 3: exited with code 3" in text
+    assert f"- job {done.id}: failed: exited with code 3. Next: read the log" in text
     assert f"proqu logs {done.id} --tail 50" in text
     assert "proqu wait <id>" in text
     assert other.id not in text
@@ -107,6 +107,7 @@ def test_prompt_reports_an_outcome_once(home, capsys):
     _, output, _ = hook("prompt", {"session_id": SESSION, "prompt": "hi"}, capsys)
     assert output["hookSpecificOutput"]["hookEventName"] == "UserPromptSubmit"
     assert f"- job {job.id}: killed: still running at its max" in context(output)
+    assert "the job broke its own limit, not the queue's" in context(output)
     assert notified(job.id)
     assert hook("prompt", {"session_id": SESSION}, capsys) == (0, None, "")
 
@@ -175,7 +176,8 @@ def test_stop_reports_finished_outcomes_once(home, capsys):
     job = add("failed", exit_code=2, reason="exited with code 2")
     _, output, _ = hook("stop", {"session_id": SESSION}, capsys)
     assert output["decision"] == "block"
-    assert f"- job {job.id}: failed, exit code 2" in output["reason"]
+    assert f"- job {job.id}: failed: exited with code 2" in output["reason"]
+    assert "exit code" not in output["reason"]
     assert "Report these outcomes to the user." in output["reason"]
     assert "proqu wait" not in output["reason"]
     assert notified(job.id)
@@ -272,3 +274,18 @@ def test_a_slow_hook_gives_up_within_its_budget(home, capsys, monkeypatch):
     assert time.monotonic() - started < 4
     assert (code, output) == (0, None)
     assert "gave up after 1s" in err
+
+
+def test_a_signal_death_names_the_signal_not_a_number(home, capsys):
+    job = add("killed", exit_code=-15, reason="still running at its max runtime of 3s")
+    _, output, _ = hook("prompt", {"session_id": SESSION}, capsys)
+    assert f"- job {job.id}: killed, ended by signal SIGTERM: still running" in context(output)
+    assert "-15" not in context(output)
+
+
+def test_a_lost_supervisor_says_it_was_not_the_jobs_fault(home, capsys):
+    from proqu import tick
+
+    add("failed", reason=tick.LOST)
+    _, output, _ = hook("prompt", {"session_id": SESSION}, capsys)
+    assert "not the job's fault, resubmit it" in context(output)

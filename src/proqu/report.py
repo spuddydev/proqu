@@ -106,7 +106,7 @@ def outcome(job: Job, log: list[str] | None) -> str:
     lines = [f"Job {job.id}{label} {job.state}{when}{reason}"]
     facts = []
     if job.exit_code is not None:
-        facts.append(_exit(job.exit_code))
+        facts.append(exit_text(job.exit_code))
     if job.peak_ram is not None:
         facts.append(f"peak RAM {format_size(job.peak_ram)}")
     if facts:
@@ -150,7 +150,7 @@ def _dependency_failed(job: Job) -> bool:
     )
 
 
-def _exit(code: int) -> str:
+def exit_text(code: int) -> str:
     if code >= 0:
         return f"exit code {code}"
     try:

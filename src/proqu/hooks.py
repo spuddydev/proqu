@@ -12,7 +12,7 @@ import signal
 import sys
 import time
 
-from proqu import paths, procs, tick
+from proqu import paths, procs, report, tick
 from proqu.store import ACTIVE, TERMINAL, Job, Store
 from proqu.units import format_duration
 
@@ -193,11 +193,12 @@ def _describe(job: Job, now: float) -> str:
         return text + f" for {format_duration(now - job.started_at)}"
     if job.state in ACTIVE:
         return text
-    if job.exit_code is not None and job.state != "succeeded":
-        text += f", exit code {job.exit_code}"
+    # a plain exit code is already in the reason, a signal is not
+    if job.exit_code is not None and job.exit_code < 0:
+        text += f", {report.exit_text(job.exit_code)}"
     if job.reason:
         text += f": {job.reason}"
-    return text + f". Log: `proqu logs {job.id} --tail 50`"
+    return text + f". Next: {report.next_step(job)} Log: `proqu logs {job.id} --tail 50`"
 
 
 def _context(event: str, lines: list[str]) -> dict | None:
