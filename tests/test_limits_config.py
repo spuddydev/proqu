@@ -115,7 +115,11 @@ def test_limits_name_the_enforcement(home, capsys, monkeypatch):
     from proqu import limits
 
     main(["limits"])
-    assert "enable-linger" in capsys.readouterr().out
+    watched = capsys.readouterr().out
+    assert "enable-linger" in watched
+    assert "GPU use is watched" in watched
     monkeypatch.setattr(limits, "cgroups_available", lambda: True)
     main(["limits"])
-    assert "enforced by the kernel" in capsys.readouterr().out
+    kernel = capsys.readouterr().out
+    assert "RAM and CPU are enforced by the kernel" in kernel
+    assert "GPU use is watched" in kernel
