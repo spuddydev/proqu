@@ -75,6 +75,7 @@ class FakeLib:
 
 def use_lib(monkeypatch, lib):
     monkeypatch.setattr(darwin, "_lib", lambda: lib)
+    monkeypatch.setattr(darwin, "_argmax_cached", None)
 
 
 def fake_bin(tmp_path, monkeypatch, **scripts):

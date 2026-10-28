@@ -121,18 +121,33 @@ def members_of(jobs: dict[str, int | None]) -> dict[str, list[int]]:
     return found
 
 
+# the job id each process was started with, by (pid, start), read once per process
+# as a supervisor asks four times a second and reading an environment is not cheap
+_job_ids: dict[tuple[int, int], bytes | None] = {}
+
+
 def _members_on_macos(
     markers: dict[bytes, str], sessions: dict[int, str], found: dict[str, list[int]], uid: int
 ) -> dict[str, list[int]]:
     """members_of on macOS, asking the kernel for each process instead of reading /proc."""
+    seen = set()
     for pid in darwin.pids():
         process = darwin.process(pid)
         if process is None or process[0] != uid or process[2]:
             continue
         owner = sessions.get(session_of(pid) or -1)
         if owner is None:
-            entries = darwin.environ(pid) or []
-            owner = next((markers[e] for e in entries if e in markers), None)
+            key = (pid, process[1])
+            seen.add(key)
+            if key not in _job_ids:
+                entries = darwin.environ(pid)
+                if entries is None:
+                    # unreadable now, perhaps only for a moment, so ask again next time
+                    continue
+                _job_ids[key] = next((e for e in entries if e.startswith(b"PROQU_JOB_ID=")), None)
+            owner = markers.get(_job_ids[key] or b"")
         if owner is not None:
             found[owner].append(pid)
+    for key in set(_job_ids) - seen:
+        del _job_ids[key]
     return found

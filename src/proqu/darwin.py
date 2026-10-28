@@ -292,7 +292,18 @@ def pids() -> list[int]:
     return [pid for pid in buf[: min(filled, room)] if pid > 0]
 
 
+_argmax_cached: int | None = None
+
+
 def _argmax(lib: _Lib) -> int:
+    """The largest argument and environment block, which does not change while running."""
+    global _argmax_cached
+    if _argmax_cached is None:
+        _argmax_cached = _read_argmax(lib)
+    return _argmax_cached
+
+
+def _read_argmax(lib: _Lib) -> int:
     mib = (ctypes.c_int * 2)(CTL_KERN, KERN_ARGMAX)
     value = ctypes.c_int(0)
     size = ctypes.c_size_t(ctypes.sizeof(value))
@@ -369,7 +380,8 @@ def environ(pid: int) -> list[bytes] | None:
         return None
     if ok != 0:
         return None
-    return parse_procargs(buf.raw[: min(size.value, room)])
+    # only the part the kernel filled, as copying the whole buffer is costly
+    return parse_procargs(ctypes.string_at(buf, min(size.value, room)))
 
 
 def _rss_from_ps(pid: int) -> int:

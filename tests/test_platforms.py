@@ -22,6 +22,7 @@ def macos(monkeypatch):
     """The process helpers and detection take their macOS path."""
     monkeypatch.setattr(procs, "_macos", lambda: True)
     monkeypatch.setattr(machine, "_macos", lambda: True)
+    monkeypatch.setattr(procs, "_job_ids", {})
 
 
 def test_process_checks_ask_the_kernel_on_macos(macos, monkeypatch):
@@ -63,6 +64,28 @@ def test_job_members_on_macos_by_session_and_by_marker(macos, monkeypatch):
         for child in (leader, marked, stranger):
             child.kill()
             child.wait()
+
+
+def test_each_process_environment_is_read_once_on_macos(macos, monkeypatch):
+    uid = os.getuid()
+    starts = {100: 1, 101: 1}
+    reads = []
+    monkeypatch.setattr(darwin, "pids", lambda: list(starts))
+    monkeypatch.setattr(darwin, "process", lambda pid: (uid, starts[pid], False))
+    monkeypatch.setattr(procs, "session_of", lambda pid: None)
+
+    def environ(pid):
+        reads.append(pid)
+        return [b"PROQU_JOB_ID=job1"] if pid == 100 else []
+
+    monkeypatch.setattr(darwin, "environ", environ)
+    for _ in range(3):
+        assert procs.members_of({"job1": None}) == {"job1": [100]}
+    assert sorted(reads) == [100, 101]
+    # a reused pid is a new process, so it is read again
+    starts[101] = 2
+    procs.members_of({"job1": None})
+    assert sorted(reads) == [100, 101, 101]
 
 
 def test_machine_detection_on_macos(macos, monkeypatch):
