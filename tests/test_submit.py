@@ -223,7 +223,9 @@ def test_place_never_shows_other_sessions(home, capsys, monkeypatch):
 def test_submit_succeeds_when_the_queue_outlook_fails(home, capsys, monkeypatch):
     assert submit("--cpus", "4") == 0
     monkeypatch.setattr(
-        cli, "queue_outlook", lambda store, now: (_ for _ in ()).throw(cli.ProquError("broken"))
+        cli,
+        "queue_outlook",
+        lambda store, now, held=None: (_ for _ in ()).throw(cli.ProquError("broken")),
     )
     capsys.readouterr()
     assert submit("--cpus", "4") == 0

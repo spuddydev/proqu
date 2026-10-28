@@ -8,28 +8,34 @@ next proqu command.
 
 import os
 import signal
+import sys
 import time
 
-from proqu import config, machine, paths, procs, runner, scheduler
+from proqu import config, limits, machine, paths, procs, runner, scheduler
 from proqu.store import Job, Store
 from proqu.units import format_size
 
 LOST = "its supervisor was lost (machine restart or crash), resubmit it"
 
 
-def tick(store: Store | None = None, cached_only: bool = False) -> None:
+def tick(store: Store | None = None, cached_only: bool = False) -> dict[str, str]:
     """Run one pass. With cached_only the machine is never detected, and a
-    pass with no cached snapshot is skipped, so the call stays quick."""
+    pass with no cached snapshot is skipped, so the call stays quick.
+
+    Returns the queued jobs held back only because the memory is not free now,
+    by id, with what they lack, as scheduler.Plan.held. Empty when nothing was
+    about to start or the pass was skipped.
+    """
     store = store or Store()
     try:
         current = config.load(paths.config_path())
     except ValueError:
         # submit, status and limits report a broken config, the queue waits for a fix
-        return
+        return {}
     seen = machine.cached() if cached_only else machine.snapshot()
     if seen is None:
-        return
-    limits = to_limits(config.effective_limits(seen, current))
+        return {}
+    allowed = to_limits(config.effective_limits(seen, current))
     unreserved = to_limits(config.effective_limits(seen, current, reserved=False))
     settings = config.settings(current)
     # a supervisor started from inside a job would share that job's cgroup when
@@ -40,8 +46,8 @@ def tick(store: Store | None = None, cached_only: bool = False) -> None:
         now = time.time()
         reap(store, now)
         active = store.active()
-        plan = scheduler.plan(
-            limits,
+        inputs = (
+            allowed,
             [to_running(job, now) for job in active if job.state != "queued"],
             [to_queued(job) for job in active if job.state == "queued"],
             dependency_states(store, active),
@@ -49,13 +55,53 @@ def tick(store: Store | None = None, cached_only: bool = False) -> None:
             settings.aging_per_minute,
             settings.length_delay_cap,
         )
+        plan = scheduler.plan(*inputs)
+        # the free memory is read only when a job is about to start, and read
+        # afresh each time, so a pass never starts a job on an old reading
+        if may_start and plan.start:
+            starting = {start.id for start in plan.start}
+            gpus = not cached_only and any(j.gpus for j in active if j.id in starting)
+            plan = scheduler.plan(*inputs, free=free_memory(active, seen, gpus))
         for fail in plan.fail:
             job = next(j for j in active if j.id == fail.id)
-            reason = reserve_reason(request(job), fail.reason, limits, unreserved)
+            reason = reserve_reason(request(job), fail.reason, allowed, unreserved)
             end_queued(store, fail.id, reason, now)
         if may_start:
             for start in plan.start:
                 begin(store, start)
+        return plan.held
+
+
+def free_memory(active: list[Job], seen: machine.Machine, gpus: bool) -> scheduler.Free:
+    """The memory new jobs could use now: what is free, less what running jobs may still use.
+
+    A running job may grow up to its request, so the part of its request it does
+    not use yet is kept for it. A job that is starting, or whose use cannot be
+    measured, keeps its whole request, which errs toward starting nothing. GPU
+    memory is read only when gpus is set, otherwise it is unknown and no GPU job
+    starts. When the free RAM cannot be read, the limits alone decide on RAM.
+    """
+    ram = machine.free_ram()
+    holding = [job for job in active if job.state != "queued"]
+    members = procs.members_of({job.id: job.job_pid for job in holding})
+    if ram is None:
+        ram = sys.maxsize
+    else:
+        for job in holding:
+            used = sum(limits.memory_of(pid) for pid in members[job.id])
+            ram -= max(0, job.ram - used)
+    vram = machine.free_vram() if gpus else None
+    if vram is not None:
+        on_gpus = [job for job in holding if job.gpu_ids]
+        # without the list of GPU processes every job counts as using none
+        apps = (limits.gpu_apps() or []) if on_gpus else []
+        uuids = {gpu.index: gpu.uuid for gpu in seen.gpus}
+        for job in on_gpus:
+            mine = set(members[job.id])
+            for index in job.gpu_ids:
+                used = sum(m or 0 for pid, u, m in apps if pid in mine and u == uuids.get(index))
+                vram[index] = vram.get(index, 0) - max(0, job.vram - used)
+    return scheduler.Free(ram, vram)
 
 
 def reserve_reason(

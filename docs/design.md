@@ -19,7 +19,7 @@ Each pass:
 
 1. Finds jobs whose supervisor has gone and ends them.
 2. Fails queued jobs that can never start.
-3. Starts the jobs that fit.
+3. Starts the jobs that fit the limits and the memory free right now. See [Free memory at start](#free-memory-at-start).
 
 Trade-offs:
 
@@ -56,7 +56,7 @@ Trade-offs:
 - Simple and inspectable, and survives crashes.
 - One writer at a time. That is plenty for one queue per user per machine.
 - A lock held by a stuck command blocks others until it ends.
-- The queue is per user. proqu does not share a queue between users, so it cannot protect one user's jobs from another's.
+- The queue is per user. proqu does not share a queue between users, so it cannot protect one user's jobs from another's. The free memory check at start partly helps, because it sees memory other users hold. It does not see their CPU use, and it does not help once a job has started.
 
 ## A reserve below the machine limits
 
@@ -66,7 +66,7 @@ Trade-offs:
 
 - Services and interactive work keep some room, so a full queue does not freeze the machine or the owner's own session.
 - Jobs cannot use the whole machine, so a request near the machine's size is refused. The refusal names the reserve and says only the owner should change it.
-- The default is a guess. It is too much on a dedicated box and too little on a busy one, which is why it is config.
+- The default is a guess. It is too much on a dedicated box, which is why it is config. On a busy machine the free memory check now covers memory others use, so the reserve matters less there.
 - The reserve is never allowed to take everything. Jobs always keep some RAM and a core.
 
 ## Long jobs count as submitted later
@@ -92,6 +92,22 @@ Trade-offs:
 A few long jobs can fill the machine for days, and short jobs then wait the whole time whatever their priority. The delay does not help once a long job is running. A cap would limit how much of RAM, cores and GPUs jobs with a long `--max` may hold together.
 
 It is deferred. What counts as long, how big the share is and whether it is a config key are not decided. It is tracked in issue #7.
+
+## Free memory at start
+
+The limits say what the queue may use. They do not say what is free. When a pass is about to start a job, it also reads the memory free now and starts the job only if its request fits. For RAM that is `MemAvailable` less what running jobs may still grow into, which is each job's `--ram` less its use now. A starting job counts its whole request. For GPUs it is the free memory per GPU from `nvidia-smi`, less the unused part of running jobs' `--vram`, and the job is placed on a GPU with room. CPU is not checked, because more work than cores only slows things down.
+
+A job held back for this stays queued. It never fails for it. Projections, reservations and backfill use the limits alone, so the check only ever delays a start. A held job counts as the first blocked job.
+
+Trade-offs:
+
+- Free memory is read afresh at each pass that is about to start a job, and never cached. It costs a read of `/proc/meminfo` and one look through `/proc` for the processes of running jobs. For GPU jobs it also runs `nvidia-smi` for the free memory and, when jobs already hold GPUs, again for their use. It happens with the queue locked, so the free memory read gives up after 5 seconds.
+- Hooks never read GPU memory, because `nvidia-smi` is too slow. A GPU job starts only in a pass from a command, a supervisor ending, or the 10 second pass in `proqu wait`. If the free GPU memory cannot be read, GPU jobs wait. If only the use of running jobs cannot be read, each counts its whole `--vram`. If `MemAvailable` cannot be read, the limits alone decide on RAM.
+- It is a check at start time and it is racy. Another program can take the memory a moment later, and nothing stops it after the job has started.
+- Later jobs can go ahead of a held job if they leave room for it within the limits and fit the free memory. Stopping the whole queue behind it could idle the machine for as long as another user holds the memory. The agent can see the wait in status and cancel.
+- No reserve or margin is taken off the free figure. The reserve applies to the limits only. Taking it off twice would leave a job sized to the limit unable to start even on an idle machine.
+- A job's use is its proportional set size. File backed pages counted in it make the figure slightly wrong.
+- In a container, free memory is the host's `MemAvailable`. The limits already respect a cgroup memory limit.
 
 ## Limits stop mistakes, not evasion
 

@@ -87,7 +87,7 @@ proqu status [ID] [--all]
 
 With no id it lists active jobs, then the ten most recent finished ones. `--all` lists every finished job. With an id it shows one job in full: command, directory, request, bid, dependencies, exit code and peak RAM. Both end with the session's remaining bid budget.
 
-A queued job shows its position, projected start and projected finish. A running job shows how long it has run, when it is expected to end and how long until it is killed.
+A queued job shows its position, projected start and projected finish. If it is held back only because other programs are using memory, it says "position N in the queue, waiting for memory other programs are using" (or "GPU memory"). It fits the queue and starts once that memory is free, so when it starts is uncertain. Other queued jobs then show "expected to start in X, or later while other programs use the memory". A running job shows how long it has run, when it is expected to end and how long until it is killed.
 
 ### wait
 
@@ -190,7 +190,15 @@ A session sees its own bids and remaining budget. It never sees another session'
 
 ### Starting jobs
 
-Jobs are considered in priority order, with the delay for long jobs included. A job starts when the machine has enough free RAM, cores and GPU memory for its whole request. A job never starts with less than it asked for.
+Jobs are considered in priority order, with the delay for long jobs included. A job starts when the limits have enough RAM, cores and GPU memory for its whole request. A job never starts with less than it asked for.
+
+It must also fit the memory that is free right now. When a pass is about to start a job, it reads the free RAM from `MemAvailable` in `/proc/meminfo`. It subtracts what running jobs may still grow into, which is each job's `--ram` less what it uses now (a job that is still starting counts its whole request). The job starts only if its `--ram` fits what is left.
+
+GPU memory works the same way. proqu reads the free memory of each GPU from `nvidia-smi`, subtracts the unused part of running jobs' `--vram` on that GPU, and places the job on a GPU that has enough free. Hooks never read GPU memory, because `nvidia-smi` is too slow for them. So a GPU job starts in a pass from a command, from a job ending, or from the 10 second pass in `proqu wait`. If `nvidia-smi` cannot be read, GPU jobs wait, and status says "waiting until the free GPU memory can be read". If `MemAvailable` cannot be read, the limits alone decide on RAM.
+
+Free memory is read afresh at each pass that is about to start a job. Nothing is kept back from it, because the reserve already applies to the limits. CPU is not checked this way, since more work than cores only slows things down.
+
+A job held back by this stays queued. It never fails for it. Other programs using the memory is not the job's fault, and the memory may come free.
 
 ### Backfill and the reservation
 
@@ -204,6 +212,8 @@ A later job may start ahead of it only if:
 So small jobs fill the gaps while a large job waits, and the large job is not starved. This is why an honest `--max` matters. A very large `--max` stops a job being used as a filler.
 
 Projected start and finish times assume every job takes its `--est`.
+
+The reservation, backfill and projections use the limits alone. They do not foresee other programs. The free memory check only ever delays a start. A job held for free memory counts as the first blocked job. A later job may go ahead of it only if it leaves room for it within the limits and fits the free memory. So later jobs can still pass a job that waits on other programs. Stopping the whole queue behind it could leave the machine idle for as long as another user holds the memory. Watch the status, and cancel a job that waits too long.
 
 ### Dependencies
 
@@ -219,7 +229,7 @@ A failed dependency is reported with the parent's id. The bid of a job that neve
 
 ### What the limits are
 
-The queue may use what the machine has, as detected at run time, minus a reserve. The detection includes any memory limit or CPU quota on the cgroup that proqu itself runs in. The usable cores are the ones proqu itself may run on, trimmed to any quota, so their numbers may not start at 0 or be in a row. If an `nvidia-smi` query fails, proqu keeps the GPU list it had before. Anything over the limit is refused at submit.
+The queue may use what the machine has, as detected at run time, minus a reserve. The detection includes any memory limit or CPU quota on the cgroup that proqu itself runs in. The usable cores are the ones proqu itself may run on, trimmed to any quota, so their numbers may not start at 0 or be in a row. If an `nvidia-smi` query fails, proqu keeps the GPU list it had before. Anything over the limit is refused at submit. These limits are the ceiling. The memory free at start time is a separate check, described under [Starting jobs](#starting-jobs), and it can only delay a job that fits the limits.
 
 The reserve keeps some of the machine free for services and interactive work:
 
@@ -227,7 +237,7 @@ The reserve keeps some of the machine free for services and interactive work:
 - CPUs: 1 core on a machine with 4 or more, else none.
 - It never takes everything. Some RAM and at least 1 core are always left for jobs.
 
-The owner can change the reserve with `reserve_ram` and `reserve_cpus`, and can lower the limits further. See [Config](#config). Agents should not change either.
+The owner can change the reserve with `reserve_ram` and `reserve_cpus`, and can lower the limits further. Lowering `ram` is not needed to protect memory that other users hold, because a job waits for free memory anyway. It still caps what the queue may use in total. See [Config](#config). Agents should not change either.
 
 CPU cores are handed out by number. Each job is pinned to its own cores, so jobs do not share them.
 
@@ -360,7 +370,7 @@ proqu config unset ram
 | `length_delay_cap` | Most a long job is delayed in the queue order. `0` for no delay. See [Priority](#priority). | 4h |
 | `kill_grace` | Time between the polite and the forced kill. Must be more than zero. | 10s |
 
-A `ram`, `cpus`, `gpus` or `vram` above what the machine has is refused, and so is a reserve that would leave nothing for jobs. Jobs already running keep what they were given. A queued job that no longer fits fails with a reason that says the limits were lowered. If the reserve alone is what stops it fitting, the reason names the reserve.
+A `ram`, `cpus`, `gpus` or `vram` above what the machine has is refused, and so is a reserve that would leave nothing for jobs. Jobs already running keep what they were given. A queued job that no longer fits fails with a reason that says the limits were lowered. If the reserve alone is what stops it fitting, the reason names the reserve. A job held back only for free memory does not fail. It waits.
 
 If the config file is broken, commands report it and the queue waits for a fix. `proqu config unset KEY` removes a bad value.
 

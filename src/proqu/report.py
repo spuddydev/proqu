@@ -13,21 +13,40 @@ from proqu.units import format_duration, format_size
 
 @dataclass(frozen=True)
 class Place:
-    """Where a queued job stands: its position and, when known, its projected times."""
+    """Where a queued job stands: its position and, when known, its projected times.
+
+    held says what memory the job waits for when it fits the queue but other
+    programs are using that memory now, as scheduler.Plan.held does. uncertain is
+    set when any job waits for memory other programs use, as projections cannot
+    foresee other programs.
+    """
 
     position: int
     start: float | None = None
     end: float | None = None
+    held: str | None = None
+    uncertain: bool = False
 
 
 def outlook(
-    store: Store, session: str, limits: scheduler.Limits, aging: float, delay_cap: float, now: float
+    store: Store,
+    session: str,
+    limits: scheduler.Limits,
+    aging: float,
+    delay_cap: float,
+    now: float,
+    held: dict[str, str] | None = None,
 ) -> dict[str, Place]:
     """The place of each of a session's queued jobs, from the inputs a scheduling pass uses.
 
     Positions count every queued job of every session, but only the session's own
-    jobs are returned, so nothing else about other jobs can leak out.
+    jobs are returned, so nothing else about other jobs can leak out. held is what
+    the last pass held back for free memory. That any job was held says only that
+    the machine is short of memory, so it is shared with every session.
     """
+    held = held or {}
+    # an unreadable GPU says nothing about other programs
+    others = any(lack != "gpu-unread" for lack in held.values())
     active = store.active()
     running = [ticking.to_running(job, now) for job in active if job.state != "queued"]
     queued = [ticking.to_queued(job) for job in active if job.state == "queued"]
@@ -39,7 +58,8 @@ def outlook(
         if job.id not in own:
             continue
         seen = projected.get(job.id)
-        places[job.id] = Place(position, seen.start, seen.end) if seen else Place(position)
+        start, end = (seen.start, seen.end) if seen else (None, None)
+        places[job.id] = Place(position, start, end, held.get(job.id), others)
     return places
 
 
@@ -49,11 +69,25 @@ def expected_end(job: Job, now: float) -> float:
     return max(now, min(started + job.max, started + job.est))
 
 
+WAITING = {
+    "ram": "waiting for memory other programs are using",
+    "gpu": "waiting for GPU memory other programs are using",
+    "gpu-unread": "waiting until the free GPU memory can be read",
+}
+
+
 def describe_place(place: Place, now: float) -> str:
     text = f"position {place.position} in the queue"
+    if place.held:
+        waiting = WAITING.get(place.held, WAITING["ram"])
+        return (
+            f"{text}, {waiting}. It fits the queue and starts once that memory is free, "
+            "so when it starts is uncertain"
+        )
     if place.start is None or place.end is None:
         return f"{text}, no start time can be projected yet"
-    return f"{text}, expected to start {_from_now(place.start, now)} and finish in " + (
+    later = ", or later while other programs use the memory" if place.uncertain else ""
+    return f"{text}, expected to start {_from_now(place.start, now)}{later} and finish in " + (
         format_duration(place.end - now)
     )
 

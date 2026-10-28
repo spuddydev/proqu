@@ -147,3 +147,19 @@ def test_a_projected_start_that_has_come_reads_as_shortly():
 def test_outcome_with_only_a_peak_ram():
     text = report.outcome(ended("failed", "exited", peak_ram=2 * 1024**3), [])
     assert "\nPeak RAM 2.0G.\n" in text
+
+
+def test_a_job_held_for_memory_says_so_and_that_its_start_is_uncertain():
+    now = 5000.0
+    for held, what in (("ram", "memory"), ("gpu", "GPU memory")):
+        place = report.Place(2, now, now + 60, held=held, uncertain=True)
+        text = report.describe_place(place, now)
+        assert f"waiting for {what} other programs are using" in text
+        assert "uncertain" in text
+        assert "expected to start" not in text
+
+
+def test_projections_behind_a_held_job_say_they_may_be_later():
+    now = 5000.0
+    text = report.describe_place(report.Place(3, now + 60, now + 120, uncertain=True), now)
+    assert "or later while other programs use the memory" in text
