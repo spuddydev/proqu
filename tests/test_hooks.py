@@ -234,6 +234,23 @@ def test_session_start_counts_the_outcomes_it_leaves(home, capsys, monkeypatch):
     assert "and 3 more, see `proqu status`" in context(output)
 
 
+def test_a_job_reported_while_a_hook_waits_for_the_lock_is_not_reported_twice(
+    home, capsys, monkeypatch
+):
+    job = add("succeeded")
+    real = Store.locked
+
+    def locked(self, *args, **kwargs):
+        other = Store()
+        with real(other):
+            other.update(job.id, notified=True)
+        other.close()
+        return real(self, *args, **kwargs)
+
+    monkeypatch.setattr(Store, "locked", locked)
+    assert hook("prompt", {"session_id": SESSION}, capsys) == (0, None, "")
+
+
 # never break the session
 
 
