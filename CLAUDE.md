@@ -20,7 +20,7 @@ A shared compute queue that lets coding agents submit heavy jobs and share a mac
 ### Jobs
 
 - A submit gives the command, RAM, CPU cores, an estimated runtime and a maximum runtime. GPU is optional.
-- Anything over the machine limit is refused. Limits default to what the machine has and can only be lowered in config.
+- Anything over the machine limit is refused. Limits default to the machine minus a small reserve for services and interactive work. Config can change the reserve or only lower the limits further.
 - Limits are hard. RAM and CPU use cgroups when available, with a watch and kill fallback. A job that asked for no GPU may not use one.
 - A job is killed when it hits its maximum runtime.
 - Every kill is reported to the agent with a reason that makes clear it was the job's fault.
@@ -28,7 +28,7 @@ A shared compute queue that lets coding agents submit heavy jobs and share a mac
 
 ### Scheduling
 
-- Priority is bid plus 10 points per minute waited, for every job. No bid counts as 0. With no bids this is plain first in first out.
+- Priority is the bid plus 10 points per minute waited, for every job. No bid counts as 0. A job counts as submitted later by a tenth of its maximum runtime, capped at 4 hours by default. With no bids and equal maximum runtimes this is plain first in first out.
 - Each session has a bid budget, 11000 by default and configurable.
 - Jobs start in priority order. A later job may start ahead only if it fits and its maximum runtime ends before the reserved start of the first blocked job (backfill), so large jobs are not starved.
 
@@ -43,6 +43,7 @@ A shared compute queue that lets coding agents submit heavy jobs and share a mac
 - Linux first. macOS later.
 - NVIDIA GPUs first.
 - Not for small or quick tasks. The skill says so with examples.
+- Services and multi-week jobs never go through proqu.
 
 ## Layout
 
