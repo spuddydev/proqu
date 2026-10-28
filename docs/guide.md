@@ -121,7 +121,7 @@ Prints the job's output. The default is the last 200 lines. `--tail 0` prints th
 proqu cancel ID
 ```
 
-A queued job is cancelled at once and its bid is refunded. A starting or running job is stopped within a few seconds and its bid is not refunded. A finished job cannot be cancelled.
+A queued job is cancelled at once and its bid is refunded. A starting or running job is stopped within a few seconds. A job that never got as far as running has its bid refunded. One that was running does not. A finished job cannot be cancelled.
 
 ### limits
 
