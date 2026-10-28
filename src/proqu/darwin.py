@@ -15,6 +15,8 @@ import sys
 import time
 
 PROC_PIDTBSDINFO = 3
+# asks proc_pidinfo for a zombie too, which it otherwise reports as missing
+FIND_ZOMBIE = 1
 RUSAGE_INFO_V0 = 0
 SZOMB = 5
 CTL_KERN = 1
@@ -253,7 +255,7 @@ def process(pid: int) -> tuple[int, int, bool] | None:
     info = _ProcBsdInfo()
     size = ctypes.sizeof(info)
     try:
-        filled = lib.proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, ctypes.addressof(info), size)
+        filled = lib.proc_pidinfo(pid, PROC_PIDTBSDINFO, FIND_ZOMBIE, ctypes.addressof(info), size)
     except _CALL_ERRORS:
         return None
     if filled != size:

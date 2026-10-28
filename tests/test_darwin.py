@@ -31,6 +31,9 @@ class FakeLib:
         if flavor != darwin.PROC_PIDTBSDINFO or pid not in self.procs:
             return 0
         uid, start, status = self.procs[pid]
+        # as the kernel does, a zombie is only found when asked for with arg 1
+        if status == darwin.SZOMB and arg != 1:
+            return 0
         info = darwin._ProcBsdInfo.from_address(buf)
         info.pbi_pid, info.pbi_uid, info.pbi_status = pid, uid, status
         info.pbi_start_tvsec = start
