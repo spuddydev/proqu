@@ -306,3 +306,26 @@ def test_apps_unreadable_topology(tree, tmp_path):
         assert amd.apps(tree, tmp_path) is None
     finally:
         nodes.chmod(stat.S_IRWXU)
+
+
+def test_fdinfo_gpu_held_with_no_memory_is_not_in_use(tree, tmp_path, monkeypatch):
+    proc = tmp_path / "proc"
+    fdinfo(proc, 10, 3, "0000:03:00.0", 1, "0 KiB")
+    fdinfo(proc, 11, 3, "0000:07:00.0", 2, "4 KiB")
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    assert amd.apps(tree, proc) == [(11, "AMD-4", 4096)]
+
+
+def test_smi_gpu_held_with_no_memory_is_not_in_use(tree, tmp_path, monkeypatch):
+    data = [
+        {
+            "gpu": 0,
+            "process_list": [
+                {"pid": 80, "memory_usage": {"vram_mem": 0}},
+                {"pid": 81, "memory_usage": {"vram_mem": 4096}},
+            ],
+        }
+    ]
+    fake_smi(tmp_path / "bin", json.dumps(data))
+    smi_path(monkeypatch, tmp_path / "bin")
+    assert amd.apps(tree, quiet_proc(tmp_path)) == [(81, "GPU-0000000000abcdef", 4096)]
