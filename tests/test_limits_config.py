@@ -1,3 +1,7 @@
+import sys
+
+import pytest
+
 from proqu.cli import main
 
 
@@ -111,6 +115,7 @@ def test_damaged_database_is_a_message(home, capsys):
     assert "damaged" in capsys.readouterr().err
 
 
+@pytest.mark.skipif(sys.platform == "darwin", reason="macOS has no cgroups to name")
 def test_limits_name_the_enforcement(home, capsys, monkeypatch):
     from proqu import limits
 
