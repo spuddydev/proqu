@@ -181,3 +181,16 @@ def test_a_second_signal_cannot_interrupt_the_cleanup(home, monkeypatch):
     interrupt_wait_with(monkeypatch, signal.SIGTERM)
     assert main(["wait", job.id]) == 143
     assert Store().waiters(job.id) == []
+
+
+def test_ctrl_c_stops_the_wait_with_130(home, capsys, monkeypatch):
+    job = submit()
+
+    def stop(store, job_id, timeout):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "wait_for", stop)
+    capsys.readouterr()
+    assert main(["wait", job.id]) == 130
+    assert f"Stopped waiting for job {job.id} before it ended." in capsys.readouterr().out
+    assert Store().waiters(job.id) == []
