@@ -59,7 +59,11 @@ A job under the limits can still wait for memory that other programs are using. 
 
    The command after `--` is run directly, without a shell. For pipes, redirects or `&&`, use `-- bash -c '...'`. The working directory (`--cwd DIR` to choose another) and environment are captured at submit, so activate the virtualenv or export variables first. Sizes take `512M`, `6G`, durations take `90s`, `20m`, `2h`, `1h30m`.
 
-2. Straight away, run `proqu wait <id>` with the Bash tool's `run_in_background` set. You are woken when the job ends, with its outcome and the end of its log. Do not poll `status` in a loop or sleep, the background wait does that for you.
+2. Read the last line submit prints.
+   - If it says "You will be woken when it ends, nothing more to run", the proqu monitor watches your session. When the job ends you get a notification with its outcome, even while idle. Do nothing more.
+   - Otherwise, straight away run `proqu wait <id>` with the Bash tool's `run_in_background` set. You are woken when the job ends, with its outcome and the end of its log.
+
+   Either way, do not poll `status` in a loop or sleep.
 
    `proqu wait` exits 0 when the job succeeded and 1 for any other outcome, so a failed or killed job shows up as a failed background command. That is normal, read its output. `proqu wait ID --timeout 30m` stops waiting after that long and exits 3 with the job still going. Exit 4 means the job is still queued but the queue config is broken, so tell the user. Exit 129, 130, 141 or 143 means the wait itself was stopped. After any of these, or 3 or 4, the job may still be going, so run the wait again.
 
@@ -107,4 +111,4 @@ Each session has a small bid budget (11000 by default) that is spent at submit. 
 
 ## Subagents
 
-A background command ends with the agent that started it. If a subagent submits a job and then finishes, its wait stops and nobody is woken. The agent that will act on the result should submit and wait itself. A subagent may still submit for its parent, but it must hand back the job id so the parent runs `proqu wait`.
+The proqu monitor belongs to the main session, so with it the main agent is woken for jobs its subagents submit. Without it, a background command ends with the agent that started it. If a subagent submits a job and then finishes, its wait stops and nobody is woken. The agent that will act on the result should submit and wait itself. A subagent may still submit for its parent, but it must hand back the job id so the parent runs `proqu wait`.

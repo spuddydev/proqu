@@ -23,9 +23,12 @@ Point three agents at one GPU box and ask each to train a model. Without help th
 ```console
 $ proqu submit --name train --ram 6G --cpus 4 --gpus 1 --vram 10G --est 2h --max 4h -- python train.py
 Started job 782ecb (train): 6.0G RAM, 4 CPUs, 1 GPU with 10.0G each, estimated 2h, killed at 4h.
-Next: run `proqu wait 782ecb` as a background command so you are woken when it ends. Check on it with `proqu status 782ecb`.
+You will be woken when it ends, nothing more to run. Check on it with `proqu status 782ecb`.
 
-$ proqu wait 782ecb          # run in the background, the agent carries on
+# the agent carries on or goes idle, then two hours later it is woken by a notification:
+proqu: job 782ecb (train): succeeded. Next: check its output and results before relying on them. Log: `proqu logs 782ecb --tail 50`
+
+$ proqu wait 782ecb          # the same outcome in full, with the end of the log
 Job 782ecb (train) succeeded after 1h52m
 Exit code 0, peak RAM 5.1G.
 Next: check its output and results before relying on them.
@@ -36,7 +39,7 @@ epoch 40 done, val loss 0.183
 ## Why proqu
 
 - **Built for agents, not people.** Every message, refusal and kill reason is written for an agent to act on. The bundled skill teaches the agent when to queue, how to estimate, and how to read the outcome.
-- **Wakes the agent when its job ends.** Success, failure, a kill or a failed dependency all reach the agent with the reason and the end of the log. Hooks remind the agent of any job it forgot to wait on.
+- **Wakes the agent when its job ends.** A Claude Code monitor watches the session, so success, failure, a kill or a failed dependency reaches the agent with the reason, even while it is idle. Nothing depends on the agent remembering to wait.
 - **Packs the machine.** Jobs start in priority order, and smaller jobs backfill the gaps without ever delaying the big job at the front.
 - **Safe on shared machines.** A job starts only when the memory it asked for is really free right now, so on a machine shared with other users a job waits rather than starting into swap. A job held back says so.
 - **Hard limits.** RAM and CPU are enforced by the kernel through cgroups where it can, and by a watch and kill fallback where it cannot. A job is killed at its maximum runtime, so a hang never holds the machine.
@@ -118,13 +121,13 @@ flowchart LR
     S -- "runs, limits, times out" --> J[Job]
     J -- "ends" --> S
     S -- "records outcome, starts the next jobs" --> Q
-    Q -- "proqu wait returns" --> A
+    Q -- "monitor notifies" --> A
 ```
 
 1. **The agent submits** a job with its RAM, cores, optional GPUs, an honest runtime estimate and a generous maximum. Anything bigger than the machine allows is refused at once.
 2. **The queue schedules** on every command and every hook. There is no daemon. A job starts when it fits and is next in line, or when it fits in a gap and will finish before the job at the front could start.
 3. **A supervisor runs the job**, one per running job, living only as long as the job. It holds the job to its request and kills it at its maximum runtime.
-4. **The agent is woken.** The agent runs `proqu wait` in the background, so it hears the outcome the moment the job ends. If it forgot, the hooks remind it before it stops.
+4. **The agent is woken.** The plugin's monitor tells the agent the moment its job ends, even while it is idle. Where the monitor is not running, as in `claude -p`, the agent runs `proqu wait` in the background instead, and the hooks remind it before it stops.
 
 ### Scheduling in one example
 
