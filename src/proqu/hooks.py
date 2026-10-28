@@ -73,8 +73,12 @@ def _out_of_time(signum, frame):
 def session_start(data: dict, session: str) -> dict | None:
     env_file = os.environ.get("CLAUDE_ENV_FILE")
     if env_file:
-        with open(env_file, "a") as handle:
-            handle.write(f"export PROQU_SESSION={shlex.quote(session)}\n")
+        # the job report below does not depend on this write
+        try:
+            with open(env_file, "a") as handle:
+                handle.write(f"export PROQU_SESSION={shlex.quote(session)}\n")
+        except OSError as error:
+            print(f"proqu hook session-start: cannot write {env_file}: {error}", file=sys.stderr)
     store = _open_store()
     if store is None:
         return None

@@ -289,3 +289,11 @@ def test_a_lost_supervisor_says_it_was_not_the_jobs_fault(home, capsys):
     add("failed", reason=tick.LOST)
     _, output, _ = hook("prompt", {"session_id": SESSION}, capsys)
     assert "not the job's fault, resubmit it" in context(output)
+
+
+def test_session_start_still_reports_when_the_env_file_cannot_be_written(home, capsys, monkeypatch):
+    monkeypatch.setenv("CLAUDE_ENV_FILE", str(home / "missing" / "env.sh"))
+    done = add("failed", reason="exited with code 3")
+    _, output, err = hook("session-start", {"session_id": SESSION}, capsys)
+    assert done.id in context(output)
+    assert "cannot write" in err
