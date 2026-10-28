@@ -32,9 +32,9 @@ from proqu.units import format_size
 PROBE_AGE = 86400
 # how long systemd-run may take to put a job in its scope
 SCOPE_WAIT = 5.0
-# how often GPU use is checked, nvidia-smi is too slow to run every poll
+# how often GPU use is checked, the GPU tools are too slow to run every poll
 GPU_EVERY = 5.0
-# the longest wait between GPU checks while nvidia-smi keeps failing
+# the longest wait between GPU checks while the GPU query keeps failing
 GPU_BACKOFF_MAX = 60.0
 
 # variables systemd-run needs to reach the user's manager
@@ -90,7 +90,7 @@ class Monitor:
         if not self.watch_gpus or time.monotonic() < self.next_gpu_check:
             return None
         apps = gpu_apps()
-        # a failing nvidia-smi is asked less and less often
+        # a failing GPU query is asked less and less often
         self.gpu_wait = GPU_EVERY if apps is not None else min(self.gpu_wait * 2, GPU_BACKOFF_MAX)
         self.next_gpu_check = time.monotonic() + self.gpu_wait
         if apps is None:
