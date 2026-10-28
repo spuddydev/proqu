@@ -646,3 +646,16 @@ def test_projection_ignores_free_memory():
     # projections stay on the limits, the free memory only ever delays a start
     out = project(BIG, [], [q("big", ram=40)], {}, NOW, 10)
     assert out["big"].start == NOW
+
+
+def test_gpu_chosen_by_free_memory_must_still_leave_room_for_the_reserved_job():
+    two = Limits(64 * G, tuple(range(8)), (Gpu(0, "u0", 24 * G), Gpu(1, "u1", 14 * G)))
+    # first needs both GPUs, so it is reserved for when the running job frees GPU 0
+    running = [r("run", gpu_ids=(0,), vram=14, mx=100)]
+    queued = [q("first", gpus=2, vram=14, t=1), q("long", gpus=1, vram=4, t=2, mx=10_000)]
+    # by the limits alone, long goes on GPU 0 and leaves room for first
+    assert started(run(two, running, queued)) == ["long"]
+    # only GPU 1 has memory free, and long there would leave first no room
+    p = free_run(two, running, queued, Free(60 * G, {0: 0, 1: 14 * G}))
+    assert started(p) == []
+    assert p.held == {}
