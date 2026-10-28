@@ -34,15 +34,15 @@ The agent submits a job, then waits for it in the background:
 
 ```sh
 proqu submit --ram 6G --cpus 4 --est 20m --max 45m -- python train.py
-# Queued job 3f9a: 6.0G RAM, 4 CPUs, estimated 20m, killed at 45m.
+# Queued job 3f9a1c: 6.0G RAM, 4 CPUs, estimated 20m, killed at 45m.
 
-proqu wait 3f9a   # run as a background command
+proqu wait 3f9a1c   # run as a background command
 ```
 
 When the job ends, the wait prints the outcome and the end of the log:
 
 ```
-Job 3f9a succeeded after 18m
+Job 3f9a1c succeeded after 18m
 Exit code 0, peak RAM 4.8G.
 Next: check its output and results before relying on them.
 ```
