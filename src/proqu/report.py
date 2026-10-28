@@ -17,7 +17,8 @@ class Place:
 
     held says what memory the job waits for when it fits the queue but other
     programs are using that memory now, as scheduler.Plan.held does. uncertain is
-    set when any job is held, as projections cannot foresee other programs.
+    set when any job waits for memory other programs use, as projections cannot
+    foresee other programs.
     """
 
     position: int
@@ -44,6 +45,8 @@ def outlook(
     the machine is short of memory, so it is shared with every session.
     """
     held = held or {}
+    # an unreadable GPU says nothing about other programs
+    others = any(lack != "gpu-unread" for lack in held.values())
     active = store.active()
     running = [ticking.to_running(job, now) for job in active if job.state != "queued"]
     queued = [ticking.to_queued(job) for job in active if job.state == "queued"]
@@ -56,7 +59,7 @@ def outlook(
             continue
         seen = projected.get(job.id)
         start, end = (seen.start, seen.end) if seen else (None, None)
-        places[job.id] = Place(position, start, end, held.get(job.id), bool(held))
+        places[job.id] = Place(position, start, end, held.get(job.id), others)
     return places
 
 

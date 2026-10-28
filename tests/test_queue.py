@@ -415,6 +415,15 @@ def test_status_and_submit_say_a_job_waits_for_memory(queue, monkeypatch, capsys
     assert "uncertain" in out
 
 
+def test_only_memory_other_programs_use_makes_projections_uncertain(queue, monkeypatch):
+    monkeypatch.setattr(tick, "tick", lambda store=None, cached_only=False: {})
+    first, second = submit(), submit()
+    store, now = Store(), time.time()
+    places = cli.queue_outlook(store, now, {first.id: "gpu-unread"})
+    assert not places[second.id].uncertain
+    assert cli.queue_outlook(store, now, {first.id: "ram"})[second.id].uncertain
+
+
 def test_running_jobs_keep_the_memory_they_may_still_use(queue, monkeypatch):
     # the sleeping job uses almost none of its 2G, but may grow into all of it
     first = submit("--ram", "2G", command=("sleep", "30"))
