@@ -53,7 +53,7 @@ The command goes after `--` and is run directly, with no shell. For pipes, redir
 
 A request is refused at once, with exit code 2, if:
 
-- it asks for more than `proqu limits` shows
+- it asks for more than `proqu limits` shows. If the reserve alone makes it too big, the refusal says so and that only the machine's owner should change it
 - `--est` is longer than `--max`
 - `--bid` is more than the session's remaining budget
 - the program cannot be found, or the directory does not exist
@@ -129,7 +129,7 @@ A queued job is cancelled at once and its bid is refunded. A starting or running
 proqu limits
 ```
 
-Shows what the queue may use: RAM, CPUs and GPUs, noting any that the owner lowered. It also shows which enforcement mode applies, the bid budget and the aging rate. Run it before submitting. It detects the machine afresh.
+Shows what the queue may use: RAM, CPUs and GPUs, noting when a figure is below the machine's because of the reserve. It also shows which enforcement mode applies, how much is kept in reserve, the bid budget, the aging rate and the length delay. Run it before submitting. It detects the machine afresh.
 
 ### config
 
@@ -143,7 +143,7 @@ For the machine's owner. See [Config](#config).
 
 ### hook
 
-`proqu hook session-start|prompt|stop` is the entry point for the Claude Code hooks. It reads JSON on standard input. Nobody runs it by hand.
+`proqu hook session-start|prompt|stop` is the entry point for the Claude Code hooks. It reads JSON on standard input. Nobody runs it by hand, so it is left out of `proqu --help`.
 
 ## Scheduling
 
@@ -196,7 +196,15 @@ A failed dependency is reported with the parent's id. The bid of a job that neve
 
 ### What the limits are
 
-The queue may use what the machine has, as detected at run time. That includes any memory limit or CPU quota on the cgroup that proqu itself runs in. The owner can only lower this, see [Config](#config). Anything over the limit is refused at submit.
+The queue may use what the machine has, as detected at run time, minus a reserve. The detection includes any memory limit or CPU quota on the cgroup that proqu itself runs in. Anything over the limit is refused at submit.
+
+The reserve keeps some of the machine free for services and interactive work:
+
+- RAM: 10% of the machine by default.
+- CPUs: 1 core on a machine with 4 or more, else none.
+- It never takes everything. At least 1 byte of RAM and 1 core are left for jobs.
+
+The owner can change the reserve with `reserve_ram` and `reserve_cpus`, and can lower the limits further. See [Config](#config). Agents should not change either.
 
 CPU cores are handed out by number. Each job is pinned to its own cores, so jobs do not share them.
 
@@ -289,12 +297,14 @@ A job belongs to the session in `PROQU_SESSION`. Outside Claude Code the variabl
 
 ## Config
 
-Config belongs to the person who owns the machine. Agents should not change it. Resource limits can only be lowered below what the machine has.
+Config belongs to the person who owns the machine. Agents should not change it. The resource limits (`ram`, `cpus`, `gpus`, `vram`) can only be lowered below what the machine has. The reserve can be set to any amount that leaves something for jobs.
 
 ```sh
 proqu config
 proqu config set ram 12G
 proqu config set gpus 0,1
+proqu config set reserve_ram 4G
+proqu config set reserve_cpus 0
 proqu config unset ram
 ```
 
@@ -302,13 +312,16 @@ proqu config unset ram
 | --- | --- | --- |
 | `ram` | RAM jobs may use in total, for example `12G`. | the machine |
 | `cpus` | CPU cores jobs may use in total. | the machine |
+| `reserve_ram` | RAM kept back from jobs, for example `4G`. `0` for none. | 10% of the machine |
+| `reserve_cpus` | CPU cores kept back from jobs. `0` for none. | 1 on 4 or more CPUs, else 0 |
 | `gpus` | GPU indices jobs may use, for example `0,1`, or `none`. | the machine |
 | `vram` | GPU memory jobs may use on each GPU. | the machine |
 | `bid_budget` | Bid points each session may spend. | 11000 |
 | `aging_per_minute` | Priority points a queued job gains per minute. | 10 |
-| `kill_grace` | Time between the polite and the forced kill. | 10s |
+| `length_delay_cap` | Most a long job is delayed in the queue order. `0` for no delay. See [Priority](#priority). | 4h |
+| `kill_grace` | Time between the polite and the forced kill. Must be more than zero. | 10s |
 
-A value above what the machine has is refused. Jobs already running keep what they were given. A queued job that no longer fits fails with a reason that says the limits were lowered.
+A `ram`, `cpus`, `gpus` or `vram` above what the machine has is refused, and so is a reserve that would leave nothing for jobs. Jobs already running keep what they were given. A queued job that no longer fits fails with a reason that says the limits were lowered. If the reserve alone is what stops it fitting, the reason names the reserve.
 
 If the config file is broken, commands report it and the queue waits for a fix. `proqu config unset KEY` removes a bad value.
 
