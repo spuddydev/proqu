@@ -74,7 +74,7 @@ Priority is the bid plus waiting time. A job also counts as submitted later by a
 
 Why reorder rather than refuse long jobs:
 
-- A multi-day training run is a normal and honest request. Refusing it would turn away real work, and any cut off for "too long" is arbitrary.
+- A multi-day training run is a normal and honest request. Refusing it would turn away real work, and any limit for "too long" is arbitrary.
 - The delay is capped, so a long job that has waited long enough still goes first. It is slowed, not starved.
 - Short jobs finish and free the machine sooner, so more jobs get through.
 - A job that understates its `--max` to gain order is killed at it.
