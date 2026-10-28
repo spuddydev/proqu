@@ -1,11 +1,13 @@
+import contextlib
 import os
+import signal
 import subprocess
 import sys
 import time
 
 import pytest
 
-from proqu import limits, runner
+from proqu import limits, procs, runner
 from proqu.store import Store
 
 from .test_runner import ended, log_of, starting_job
@@ -213,7 +215,7 @@ def test_peak_of_a_job_shorter_than_one_poll_is_recorded(home):
     job = starting_job([sys.executable, "-c", code], ram=500 * M)
     # a fresh process, so the peak of earlier test jobs is not inherited
     script = (
-        "from proqu import limits, runner\n"
+        "from proqu import limits, procs, runner\n"
         "limits.cgroups_available = lambda: False\n"
         f"runner.supervise('{job.id}')\n"
     )
@@ -221,3 +223,17 @@ def test_peak_of_a_job_shorter_than_one_poll_is_recorded(home):
     done = ended(job)
     assert done.state == "succeeded"
     assert 80 * M < done.peak_ram < 500 * M
+
+
+def test_a_process_hiding_its_job_id_does_not_outlive_its_scope(cgroups, tmp_path):
+    pid_file = tmp_path / "pid"
+    script = f"env -i setsid /bin/sleep 300 & echo $! > {pid_file}; sleep 0.5"
+    job = starting_job(["sh", "-c", script])
+    runner.supervise(job.id)
+    assert ended(job).state == "succeeded"
+    pid = int(pid_file.read_text())
+    try:
+        assert not procs.is_alive(pid, procs.start_ticks(pid))
+    finally:
+        with contextlib.suppress(OSError):
+            os.kill(pid, signal.SIGKILL)

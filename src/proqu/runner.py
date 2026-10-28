@@ -116,6 +116,7 @@ def _supervise(store: Store, job_id: str) -> None:
     finally:
         # whatever went wrong above, the job must not outlive its supervisor
         stop_members(job_id, proc.pid, settings.kill_grace)
+        monitor.kill_all()
         code = _reap(proc)
         evidence = monitor.finish(code)
     if running:

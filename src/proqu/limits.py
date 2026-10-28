@@ -71,6 +71,9 @@ class Monitor:
         members = set(procs.job_members(self.job.id, self.session))
         return gpu_breach(self.job, self.gpu_uuids, [app for app in apps if app[0] in members])
 
+    def kill_all(self) -> None:
+        """Stop anything of the job the process list missed. Only a cgroup can do this."""
+
     def finish(self, code: int | None = None) -> tuple[str, str] | None:
         """Evidence found only once the job has ended, given its exit code."""
         # a short job can start and end between two samples, the kernel remembers its peak
@@ -194,6 +197,11 @@ class CgroupMonitor(Monitor):
         except (OSError, ValueError):
             return False
         return True
+
+    def kill_all(self) -> None:
+        # unlike the process list, this also catches a process that hid its job id
+        with contextlib.suppress(OSError):
+            (self.path / "cgroup.kill").write_text("1")
 
     def finish(self, code: int | None = None) -> tuple[str, str] | None:
         self._stop.set()
