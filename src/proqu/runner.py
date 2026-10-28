@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from proqu import config, machine, paths, procs
+from proqu import config, limits, machine, paths, procs
 from proqu.store import Job, Store
 from proqu.units import format_duration
 
@@ -98,7 +98,7 @@ def _supervise(store: Store, job_id: str) -> None:
     with open(paths.log_path(job_id), "ab") as log:
         try:
             _check_cpus(job)
-            proc = launch(job, log)
+            proc, monitor = start(job, log)
         except (OSError, subprocess.SubprocessError, ValueError) as error:
             with store.locked():
                 _end_unstarted(store, job, "failed", f"could not start: {_describe(error)}")
@@ -111,14 +111,16 @@ def _supervise(store: Store, job_id: str) -> None:
                 job_id, ("starting",), "running", job_pid=proc.pid, started_at=time.time()
             )
         if running:
-            outcome = watch(store, job, proc)
+            outcome = watch(store, job, proc, monitor)
     finally:
         # whatever went wrong above, the job must not outlive its supervisor
         stop_members(job_id, proc.pid, settings.kill_grace)
+        monitor.kill_all()
         code = _reap(proc)
+        evidence = monitor.finish(code)
     if running:
-        state, reason = outcome or classify(code)
-        _finish(store, job_id, state, reason, code)
+        state, reason = outcome or evidence or classify(code)
+        _finish(store, job_id, state, reason, code, monitor.peak)
 
 
 def _end_unstarted(store: Store, job: Job, state: str, reason: str) -> None:
@@ -142,20 +144,84 @@ def _reap(proc: subprocess.Popen) -> int | None:
         return None
 
 
-def launch(job: Job, log) -> subprocess.Popen:
-    """Start the job's command in its own session, pinned to its CPUs."""
+def start(job: Job, log) -> tuple[subprocess.Popen, limits.Monitor]:
+    """Launch the job with the strongest enforcement this machine offers."""
+    _check_runnable(job)
+    uuids = gpu_uuids(job)
+    if limits.cgroups_available():
+        marker = paths.state_dir() / "logs" / f"{job.id}.started"
+        proc = launch(job, log, limits.scope_command(job, marker))
+        started, scope = limits.await_scope(proc, marker)
+        if started:
+            marker.unlink(missing_ok=True)
+            if scope is None:
+                return proc, limits.Monitor(job, proc.pid, uuids)
+            return proc, limits.CgroupMonitor(job, proc.pid, scope, uuids)
+        # the scope looks like it was never made, but it may only have been slow
+        with contextlib.suppress(OSError):
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
+        late = marker.exists()
+        marker.unlink(missing_ok=True)
+        if late:
+            # it ran, so running it again could repeat what it already did
+            raise OSError("its cgroup was too slow to start, the job was stopped, resubmit it")
+        limits.mark_unavailable()
+        print(
+            "proqu: systemd-run did not start the job in a cgroup, "
+            "running it without one and watching its RAM instead",
+            flush=True,
+        )
+    proc = launch(job, log, job.argv)
+    return proc, limits.Monitor(job, proc.pid, uuids)
+
+
+def gpu_uuids(job: Job) -> tuple[str, ...]:
+    """The uuids of the GPUs assigned to the job."""
+    known = {gpu.index: gpu.uuid for gpu in machine.snapshot().gpus}
+    return tuple(known.get(index, str(index)) for index in job.gpu_ids)
+
+
+def _check_runnable(job: Job) -> None:
+    """Fail early and plainly when the command cannot run at all.
+
+    Inside a scope the shell step would only report exit code 127.
+    """
+    if not os.path.isdir(job.cwd):
+        raise FileNotFoundError(2, "No such directory", job.cwd)
+    program = job.argv[0]
+    if "/" in program:
+        candidates = [os.path.join(job.cwd, program)]
+    else:
+        # a job with no PATH is searched for the way the system would, in the default path
+        search = job.env.get("PATH", os.defpath)
+        candidates = [os.path.join(folder or ".", program) for folder in search.split(os.pathsep)]
+    denied = False
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            if os.access(candidate, os.X_OK):
+                return
+            denied = True
+    if denied:
+        raise PermissionError(13, "Permission denied", program)
+    raise FileNotFoundError(2, "No such file or directory", program)
+
+
+def launch(job: Job, log, argv: list[str]) -> subprocess.Popen:
+    """Start a command for the job in its own session, pinned to its CPUs."""
     env = dict(job.env)
     env["PROQU_JOB_ID"] = job.id
-    uuids = {gpu.index: gpu.uuid for gpu in machine.snapshot().gpus}
-    env["CUDA_VISIBLE_DEVICES"] = ",".join(uuids.get(i, str(i)) for i in job.gpu_ids)
+    env["CUDA_VISIBLE_DEVICES"] = ",".join(gpu_uuids(job))
     cpu_ids = set(job.cpu_ids)
 
     def pin() -> None:
         if cpu_ids:
             os.sched_setaffinity(0, cpu_ids)
 
+    if argv is not job.argv:
+        env = limits.scope_env(env)
     return subprocess.Popen(
-        job.argv,
+        argv,
         cwd=job.cwd,
         env=env,
         stdin=subprocess.DEVNULL,
@@ -166,7 +232,9 @@ def launch(job: Job, log) -> subprocess.Popen:
     )
 
 
-def watch(store: Store, job: Job, proc: subprocess.Popen) -> tuple[str, str] | None:
+def watch(
+    store: Store, job: Job, proc: subprocess.Popen, monitor: limits.Monitor
+) -> tuple[str, str] | None:
     """Wait for the job, returning why it had to be stopped, or None if it ended."""
     deadline = time.monotonic() + job.max
     while True:
@@ -187,6 +255,9 @@ def watch(store: Store, job: Job, proc: subprocess.Popen) -> tuple[str, str] | N
                 f"still running at its max runtime of {format_duration(job.max)}: "
                 "if it was making progress, resubmit with a larger --max, otherwise find the hang",
             )
+        broken = monitor.check()
+        if broken:
+            return broken
 
 
 def stop_members(job_id: str, session: int, grace: float) -> None:
@@ -224,7 +295,14 @@ def classify(code: int | None) -> tuple[str, str | None]:
     return "failed", f"exited with code {code}"
 
 
-def _finish(store: Store, job_id: str, state: str, reason: str | None, code: int | None) -> None:
+def _finish(
+    store: Store,
+    job_id: str,
+    state: str,
+    reason: str | None,
+    code: int | None,
+    peak: int | None = None,
+) -> None:
     # the first writer wins, so a job already marked lost or cancelled keeps that
     with store.locked():
         store.transition(
@@ -234,6 +312,7 @@ def _finish(store: Store, job_id: str, state: str, reason: str | None, code: int
             reason=reason,
             exit_code=code,
             ended_at=time.time(),
+            peak_ram=peak or None,
         )
 
 
