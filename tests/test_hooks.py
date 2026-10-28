@@ -262,3 +262,13 @@ def test_a_failing_pass_does_not_break_the_hook(home, monkeypatch, capsys):
     code, output, _ = hook("prompt", {"session_id": SESSION}, capsys)
     assert code == 0
     assert job.id in context(output)
+
+
+def test_a_slow_hook_gives_up_within_its_budget(home, capsys, monkeypatch):
+    monkeypatch.setattr(hooks, "BUDGET", 1)
+    monkeypatch.setitem(hooks.HANDLERS, "prompt", lambda data, session: time.sleep(10))
+    started = time.monotonic()
+    code, output, err = hook("prompt", {"session_id": SESSION}, capsys)
+    assert time.monotonic() - started < 4
+    assert (code, output) == (0, None)
+    assert "gave up after 1s" in err

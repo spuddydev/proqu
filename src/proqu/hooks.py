@@ -8,6 +8,7 @@ import contextlib
 import json
 import os
 import shlex
+import signal
 import sys
 import time
 
@@ -17,6 +18,8 @@ from proqu.units import format_duration
 
 # a busy queue must not hold up the agent's session for long
 LOCK_TIMEOUT = 3.0
+# a hook ends by itself after this long, inside the timeout in hooks.json
+BUDGET = 8
 # jobs listed per message, so a long history cannot flood the agent's context
 SHOWN = 20
 
@@ -30,6 +33,13 @@ def run(event: str, stdin=None, stdout=None) -> int:
     """Handle one hook event. Always returns 0."""
     stdin = stdin or sys.stdin
     stdout = stdout or sys.stdout
+    previous = None
+    try:
+        previous = signal.signal(signal.SIGALRM, _out_of_time)
+        signal.alarm(BUDGET)
+    except ValueError:
+        # not the main thread, so no alarm can be set
+        pass
     try:
         handler = HANDLERS.get(event)
         if handler is None:
@@ -49,7 +59,15 @@ def run(event: str, stdin=None, stdout=None) -> int:
     except Exception as error:
         message = " ".join(str(error).split()) or type(error).__name__
         print(f"proqu hook {event}: {message}", file=sys.stderr)
+    finally:
+        if previous is not None:
+            signal.alarm(0)
+            signal.signal(signal.SIGALRM, previous)
     return 0
+
+
+def _out_of_time(signum, frame):
+    raise TimeoutError(f"gave up after {BUDGET}s so the session is not held up")
 
 
 def session_start(data: dict, session: str) -> dict | None:
