@@ -168,9 +168,9 @@ def test_running_job_stops_on_cancel(home):
     import threading
 
     job = starting_job(["sleep", "30"])
-    store = Store()
 
     def cancel_soon():
+        store = Store()
         while store.get(job.id).state != "running":
             time.sleep(0.05)
         with store.locked():
