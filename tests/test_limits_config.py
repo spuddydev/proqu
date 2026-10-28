@@ -109,3 +109,17 @@ def test_damaged_database_is_a_message(home, capsys):
     paths.db_path().write_bytes(b"not a database" * 200)
     assert main(["status"]) == 1
     assert "damaged" in capsys.readouterr().err
+
+
+def test_limits_name_the_enforcement(home, capsys, monkeypatch):
+    from proqu import limits
+
+    main(["limits"])
+    watched = capsys.readouterr().out
+    assert "enable-linger" in watched
+    assert "GPU use is watched" in watched
+    monkeypatch.setattr(limits, "cgroups_available", lambda: True)
+    main(["limits"])
+    kernel = capsys.readouterr().out
+    assert "RAM and CPU are enforced by the kernel" in kernel
+    assert "GPU use is watched" in kernel

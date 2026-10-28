@@ -267,7 +267,7 @@ def test_first_writer_wins_over_the_supervisor(home):
 
 
 def test_supervisor_error_still_stops_the_job(home, monkeypatch):
-    def broken(store, job, proc):
+    def broken(*args):
         raise RuntimeError("supervisor bug")
 
     monkeypatch.setattr(runner, "watch", broken)
@@ -288,3 +288,21 @@ def test_supervisor_ignores_modules_in_the_callers_directory(home, tmp_path, mon
     while store.get(job.id).state in ("starting", "running") and time.monotonic() < deadline:
         time.sleep(0.1)
     assert store.get(job.id).state == "succeeded"
+
+
+def test_job_without_a_path_is_found_in_the_default_path(home):
+    job = starting_job(["true"], env={})
+    runner.supervise(job.id)
+    assert ended(job).state == "succeeded"
+
+
+def test_file_that_is_not_executable_is_reported_as_denied(home, tmp_path):
+    (tmp_path / "tool").write_text("#!/bin/sh\n")
+    job = starting_job(["./tool"], tmp_path)
+    runner.supervise(job.id)
+    done = ended(job)
+    assert done.state == "failed"
+    assert done.reason == "could not start: Permission denied ./tool"
+    on_path = starting_job(["tool"], tmp_path, env={"PATH": str(tmp_path)})
+    runner.supervise(on_path.id)
+    assert ended(on_path).reason == "could not start: Permission denied tool"

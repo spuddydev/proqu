@@ -1,6 +1,6 @@
 import pytest
 
-from proqu import machine, tick
+from proqu import limits, machine, tick
 
 G = 1024**3
 
@@ -20,4 +20,6 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setattr(machine, "snapshot", lambda refresh=False: FAKE_MACHINE)
     # command tests check the commands alone, real runs are in the queue tests
     monkeypatch.setattr(tick, "tick", lambda store=None: None)
+    # supervisor tests use the watch enforcement unless they ask for cgroups
+    monkeypatch.setattr(limits, "cgroups_available", lambda: False)
     return tmp_path
