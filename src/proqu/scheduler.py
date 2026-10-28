@@ -169,7 +169,7 @@ class _Pool:
             if g in self.vram:
                 self.vram[g] -= req.vram
         if req.long:
-            self._count_long(req, gpu_ids, 1)
+            self._count_long(req, cpu_ids, gpu_ids, 1)
 
     def give(self, req: Request, cpu_ids: tuple[int, ...], gpu_ids: tuple[int, ...]) -> None:
         self.ram += req.ram
@@ -178,12 +178,15 @@ class _Pool:
             if g in self.vram:
                 self.vram[g] += req.vram
         if req.long:
-            self._count_long(req, gpu_ids, -1)
+            self._count_long(req, cpu_ids, gpu_ids, -1)
 
-    def _count_long(self, req: Request, gpu_ids: tuple[int, ...], sign: int) -> None:
+    def _count_long(
+        self, req: Request, cpu_ids: tuple[int, ...], gpu_ids: tuple[int, ...], sign: int
+    ) -> None:
+        # like the pool, only cores within the limits count against the share
         self.long_jobs += sign
         self.long_ram += sign * req.ram
-        self.long_cpus += sign * req.cpus
+        self.long_cpus += sign * len(self.allowed.intersection(cpu_ids))
         for g in gpu_ids:
             if g in self.long_vram:
                 self.long_vram[g] += sign * req.vram

@@ -738,3 +738,12 @@ def test_a_job_at_the_threshold_is_not_long():
     running = [r("old", ram=4, mx=DAY, cpu_ids=(0,))]
     queued = [q("edge", ram=3, mx=12 * 3600)]
     assert started(share_run(L8, running, queued)) == ["edge"]
+
+
+def test_cores_outside_lowered_limits_do_not_count_against_the_share():
+    # old started on cores 4 to 7 before the limits were lowered to cores 0 to 3
+    four = Limits(8 * G, (0, 1, 2, 3), ())
+    running = [r("old", mx=DAY, cpu_ids=(4, 5, 6, 7))]
+    queued = [q("long", cpus=2, mx=DAY)]
+    assert started(share_run(four, running, queued, share=Share(12 * 3600, 100))) == ["long"]
+    assert started(share_run(four, running, queued)) == ["long"]
