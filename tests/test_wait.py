@@ -90,3 +90,26 @@ def test_bad_timeout_is_refused(home, capsys):
     job = submit()
     assert main(["wait", job.id, "--timeout", "soon"]) == 2
     assert "--timeout" in capsys.readouterr().err
+
+
+def test_wait_on_a_queued_job_stops_when_the_config_is_broken(home, capsys):
+    submit("--cpus", "4")
+    second = submit("--cpus", "4")
+    paths.config_path().write_text("{bad")
+    capsys.readouterr()
+    assert main(["wait", second.id]) == cli.CONFIG_BROKEN
+    out = capsys.readouterr().out
+    assert f"job {second.id} is still queued and nothing can start" in out
+    assert "not valid JSON" in out and f"run `proqu wait {second.id}` again" in out
+    assert Store().waiters(second.id) == []
+
+
+def test_wait_stops_when_the_config_breaks_while_waiting(home, capsys, monkeypatch):
+    submit("--cpus", "4")
+    second = submit("--cpus", "4")
+    monkeypatch.setattr(cli.time, "sleep", lambda seconds: paths.config_path().write_text("{bad"))
+    capsys.readouterr()
+    assert main(["wait", second.id]) == cli.CONFIG_BROKEN
+    lines = capsys.readouterr().out.splitlines()
+    assert lines[0].startswith(f"Job {second.id} is queued, position 2")
+    assert "nothing can start" in lines[-1]

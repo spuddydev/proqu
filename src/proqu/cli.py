@@ -366,6 +366,7 @@ WAIT_POLL = 2.0
 WAIT_TICK = 10.0
 LOG_LINES = 20
 TIMED_OUT = 3
+CONFIG_BROKEN = 4
 
 
 class Terminated(Exception):
@@ -418,6 +419,17 @@ def wait_for(store: Store, job_id: str, timeout: float | None) -> int:
         job = own_job(store, job_id)
         if job.state in TERMINAL:
             return report_end(store, job)
+        if job.state == "queued":
+            try:
+                load_config()
+            except ProquError as error:
+                print(
+                    f"Stopped waiting: job {job.id} is still queued and nothing can start while "
+                    f"the queue config is broken ({error}). Tell the user, then run "
+                    f"`proqu wait {job.id}` again once it is fixed.",
+                    flush=True,
+                )
+                return CONFIG_BROKEN
         if first and job.state == "queued":
             now = time.time()
             place = queue_outlook(store, now).get(job.id)
@@ -616,7 +628,9 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Wait for a job to end, then report how it ended, what to do next and the end of "
             "its log. Run it as a background command so you are woken when the job ends. "
-            "Exits 0 when the job succeeded, 1 otherwise, 3 on --timeout."
+            "Exit codes: 0 the job succeeded, 1 it ended any other way, 3 --timeout ran out, "
+            "4 the job is still queued but the queue config is broken, 130 or 143 the wait was "
+            "interrupted. For 3, 4, 130 and 143 the job has not ended, so wait again."
         ),
     )
     wait.add_argument("id", help="the job id from submit or status")
