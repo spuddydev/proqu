@@ -1,4 +1,5 @@
 import contextlib
+import itertools
 import os
 import signal
 import subprocess
@@ -247,3 +248,19 @@ def test_scope_command_names_systemd_run_by_full_path(home, monkeypatch, tmp_pat
     monkeypatch.setenv("PATH", str(fake))
     job = starting_job(["true"], env={"PATH": "/nowhere"})
     assert limits.scope_command(job, tmp_path / "m")[0] == str(fake / "systemd-run")
+
+
+def test_failing_gpu_query_is_retried_less_and_less_often(home, monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(limits.time, "monotonic", lambda: now[0])
+    calls = []
+    monkeypatch.setattr(limits, "gpu_apps", lambda: calls.append(now[0]))
+    monitor = limits.Monitor(starting_job(["true"]), 1)
+    monitor.watch_gpus = True
+    for _ in range(300):
+        monitor.check_gpus()
+        now[0] += 1
+    gaps = [later - earlier for earlier, later in itertools.pairwise(calls)]
+    assert gaps == sorted(gaps)
+    assert gaps[-1] == limits.GPU_BACKOFF_MAX
+    assert len(calls) < 15

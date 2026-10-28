@@ -25,6 +25,8 @@ PROBE_AGE = 86400
 SCOPE_WAIT = 5.0
 # how often GPU use is checked, nvidia-smi is too slow to run every poll
 GPU_EVERY = 5.0
+# the longest wait between GPU checks while nvidia-smi keeps failing
+GPU_BACKOFF_MAX = 60.0
 
 OWN_LIMIT = "this was the job's own limit"
 
@@ -47,6 +49,7 @@ class Monitor:
         self.watch_gpus = shutil.which("nvidia-smi") is not None
         self.next_gpu_check = time.monotonic()
         self.gpu_query_failed = False
+        self.gpu_wait = GPU_EVERY
 
     def check(self) -> tuple[str, str] | None:
         return self.check_ram() or self.check_gpus()
@@ -61,8 +64,10 @@ class Monitor:
     def check_gpus(self) -> tuple[str, str] | None:
         if not self.watch_gpus or time.monotonic() < self.next_gpu_check:
             return None
-        self.next_gpu_check = time.monotonic() + GPU_EVERY
         apps = gpu_apps()
+        # a failing nvidia-smi is asked less and less often
+        self.gpu_wait = GPU_EVERY if apps is not None else min(self.gpu_wait * 2, GPU_BACKOFF_MAX)
+        self.next_gpu_check = time.monotonic() + self.gpu_wait
         if apps is None:
             if not self.gpu_query_failed:
                 print("proqu: could not query GPU use, GPU limits are not checked", flush=True)
