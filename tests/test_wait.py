@@ -128,3 +128,18 @@ def test_wait_report_stands_when_marking_it_seen_fails(home, capsys, monkeypatch
     capsys.readouterr()
     assert main(["wait", job.id]) == 0
     assert f"Job {job.id} succeeded after 5s" in capsys.readouterr().out
+
+
+def test_terminated_after_the_report_is_not_a_stopped_wait(home, capsys, monkeypatch):
+    job = submit()
+    end(job.id, state="failed", reason="exited with code 2", started_at=time.time())
+
+    def terminate(self, job_id, **changes):
+        raise cli.Terminated
+
+    monkeypatch.setattr(Store, "update", terminate)
+    capsys.readouterr()
+    assert main(["wait", job.id]) == 1
+    out = capsys.readouterr().out
+    assert f"Job {job.id} failed after" in out
+    assert "Stopped waiting" not in out

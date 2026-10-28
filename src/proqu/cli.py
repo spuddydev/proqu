@@ -453,8 +453,12 @@ def report_end(store: Store, job: Job) -> int:
     print(report.outcome(job, report.tail_lines(paths.log_path(job.id), LOG_LINES)), flush=True)
     # after printing, so a crash repeats the report rather than losing it
     # the report is out and the job's outcome stands, so a failed mark must not change the exit code
-    with contextlib.suppress(LockTimeout, sqlite3.Error, OSError), store.locked():
-        store.update(job.id, notified=True)
+    try:
+        with contextlib.suppress(LockTimeout, sqlite3.Error, OSError), store.locked():
+            store.update(job.id, notified=True)
+    except Terminated:
+        # the job did end and was reported, so this is not a wait that stopped early
+        pass
     return 0 if job.state == "succeeded" else 1
 
 
