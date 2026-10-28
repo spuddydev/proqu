@@ -12,9 +12,9 @@ A shared compute queue that lets coding agents submit heavy jobs and share a mac
 
 ### Shape
 
-- Shipped as a Claude Code plugin: a skill that explains when and how to use it, hooks for session identity and notifications, and the `proqu` CLI on the agent's PATH.
+- Shipped as a Claude Code plugin: a skill that explains when and how to use it, hooks for session identity and notifications, a monitor that wakes the agent when its jobs end, and the `proqu` CLI on the agent's PATH.
 - The CLI is Python standard library only. One install script fetches a release, links the command and installs the plugin.
-- No resident server. State is one SQLite file under a file lock. Every command runs a scheduling pass. Each running job has a short lived supervisor that enforces limits and runs a scheduling pass when the job ends.
+- No resident server. State is one SQLite file under a file lock. Every command runs a scheduling pass, and so does each session's monitor every 10 seconds. Each running job has a short lived supervisor that enforces limits and runs a scheduling pass when the job ends.
 - One queue per user per machine.
 
 ### Jobs
@@ -38,7 +38,7 @@ A shared compute queue that lets coding agents submit heavy jobs and share a mac
 
 - A session sees only its own jobs: state, queue position, its own bids and budget, and projected start and finish from the estimates.
 - A session never sees other sessions' jobs or bids.
-- The agent is woken when its job ends, whether by success, failure, kill or a failed dependency.
+- The agent is woken when its job ends, whether by success, failure, kill or a failed dependency. A plugin monitor does this for the session. Without it, a background `proqu wait` does.
 
 ### Scope
 
@@ -55,6 +55,7 @@ A shared compute queue that lets coding agents submit heavy jobs and share a mac
 - `.claude-plugin/` plugin and marketplace manifests.
 - `bin/proqu` launcher that runs the CLI from the plugin's files.
 - `hooks/hooks.json` hook wiring for the plugin.
+- `monitors/monitors.json` the session monitor that wakes the agent.
 - `skills/proqu/` the skill agents read.
 - `.github/` CI, PR checks and templates.
 - `.claude/` project skills and workflows for working on this repo.

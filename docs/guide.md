@@ -24,7 +24,7 @@ proqu submit --ram 6G --cpus 4 --est 20m --max 45m -- python train.py
 proqu wait <id>
 ```
 
-Run `proqu wait` as a background command so the agent is woken when the job ends. The skill that comes with the plugin tells the agent this. Sizes and times always need a unit.
+The plugin's monitor wakes the agent when a job ends, see [Monitor](#monitor). Where it is not running, submit says to run `proqu wait` as a background command instead. Sizes and times always need a unit.
 
 - Sizes: `512M`, `6G`, `1.5T`. A bare number is refused.
 - Durations: `90s`, `20m`, `2h`, `1h30m`. Units are lowercase.
@@ -338,7 +338,7 @@ A finished job is listed on one line: its state and reason, then "Next:" with wh
 - Exports `PROQU_SESSION` with the Claude Code session id, so every `proqu` command in the session uses it.
 - If the environment file is missing or cannot be written, it shows the session id and says to put `PROQU_SESSION=ID` in front of every `proqu` command. Without that the commands use the shared `default` session.
 - Reports jobs of the session that finished without being reported.
-- Lists jobs still in the queue and gives the exact `proqu wait ID` command for each.
+- Lists jobs still in the queue. If no monitor watches the session, it gives the exact `proqu wait ID` command for each.
 
 ### UserPromptSubmit
 
@@ -346,11 +346,21 @@ Reports jobs of the session that finished since the agent last heard. Each outco
 
 ### Stop
 
-Blocks the agent from stopping while the session has an active job that nobody is waiting on, or an outcome not yet reported. The message lists the exact `proqu wait ID` command for each such job, to run in the background, and the exact `proqu cancel ID` command for each. It blocks once. Claude Code sets `stop_hook_active` on the retry and the hook then lets the agent stop, even if a job is still unwatched. It is a reminder, not a guarantee.
+Blocks the agent from stopping while the session has an active job that nobody is waiting on and no monitor watches, or an outcome not yet reported. The message lists the exact `proqu wait ID` command for each such job, to run in the background, and the exact `proqu cancel ID` command for each. It blocks once. Claude Code sets `stop_hook_active` on the retry and the hook then lets the agent stop, even if a job is still unwatched. It is a reminder, not a guarantee.
 
 ### Sessions
 
 A job belongs to the session in `PROQU_SESSION`. Outside Claude Code the variable is unset and every caller shares the session `default`. `/clear` and forking a session start a new session, which cannot see the old one's jobs.
+
+
+### Monitor
+
+The plugin also has a Claude Code monitor, `proqu watch`, which runs for the whole session. When one of the session's jobs ends it prints one line with the outcome, the next step and the log command. Claude Code delivers that line as a notification and wakes the agent even when it is idle. So nothing depends on the agent starting a wait.
+
+- While it runs, submit says "You will be woken when it ends, nothing more to run" and the Stop hook does not ask for a wait.
+- It runs a scheduling pass every 10 seconds, as a wait does.
+- It belongs to the session it started in. After `/clear` it stops, so a new session never hears about the old one's jobs. Jobs submitted after that fall back to `proqu wait`.
+- Claude Code does not start monitors for `claude -p`, so there submit says to wait.
 
 ## Config
 

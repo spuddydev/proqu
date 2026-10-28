@@ -18,6 +18,8 @@ def private_state(tmp_path_factory, monkeypatch):
     """No test may read or write the real queue, whatever it forgets to set."""
     monkeypatch.setenv("PROQU_HOME", str(tmp_path_factory.mktemp("state")))
     monkeypatch.delenv("PROQU_SESSION", raising=False)
+    monkeypatch.delenv("CLAUDE_PID", raising=False)
+    monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
 
 
 @pytest.fixture
