@@ -225,13 +225,17 @@ def test_wait_reports_a_failed_job(queue, quick, capsys):
     assert out.endswith("oops\n")
 
 
-def test_wait_on_a_queued_job_that_then_runs(queue, quick, capsys):
-    submit("--ram", "3G", command=("sleep", "2"))
+def test_wait_on_a_queued_job_that_then_runs(queue, tmp_path):
+    release = tmp_path / "release"
+    hold = f"while [ ! -e {release} ]; do sleep 0.1; done"
+    submit("--ram", "3G", command=("sh", "-c", hold))
     second = submit("--ram", "2G", command=("echo", "done"))
     assert Store().get(second.id).state == "queued"
-    capsys.readouterr()
-    assert main(["wait", second.id]) == 0
-    out = capsys.readouterr().out
+    proc = waiter_for(second.id)
+    # the first job is held until the wait is running, so no timing is assumed
+    release.touch()
+    out, _ = proc.communicate(timeout=60)
+    assert proc.returncode == 0
     assert out.startswith(f"Job {second.id} is queued, position 1 in the queue, expected to start")
     assert f"Job {second.id} succeeded after " in out
     assert out.endswith("done\n")
