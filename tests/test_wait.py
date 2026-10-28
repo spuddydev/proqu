@@ -194,3 +194,24 @@ def test_ctrl_c_stops_the_wait_with_130(home, capsys, monkeypatch):
     assert main(["wait", job.id]) == 130
     assert f"Stopped waiting for job {job.id} before it ended." in capsys.readouterr().out
     assert Store().waiters(job.id) == []
+
+
+def test_wait_runs_scheduling_passes_while_it_waits(home, monkeypatch):
+    job = submit()
+    passes = []
+    monkeypatch.setattr(cli, "WAIT_TICK", 0.0)
+    monkeypatch.setattr(cli.ticking, "tick", lambda store=None: passes.append(1))
+    assert cli.wait_for(Store(), job.id, 0.3) == cli.TIMED_OUT
+    assert len(passes) >= 2
+
+
+@pytest.mark.parametrize("error", [cli.LockTimeout("busy"), sqlite3.OperationalError("locked")])
+def test_a_failed_scheduling_pass_does_not_end_the_wait(home, monkeypatch, error):
+    job = submit()
+
+    def refuse(store=None):
+        raise error
+
+    monkeypatch.setattr(cli, "WAIT_TICK", 0.0)
+    monkeypatch.setattr(cli.ticking, "tick", refuse)
+    assert cli.wait_for(Store(), job.id, 0.2) == cli.TIMED_OUT
