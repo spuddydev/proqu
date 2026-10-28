@@ -179,12 +179,19 @@ class CgroupMonitor(Monitor):
         # if the limit was not applied, fall back to watching
         # the kernel rounds the limit up to a whole page
         page = os.sysconf("SC_PAGE_SIZE")
-        self.enforced = _read_int(path / "memory.max") == -(-job.ram // page) * page
+        self.applied = -(-job.ram // page) * page
+        self.enforced = _read_int(path / "memory.max") == self.applied
+        self.tampered = False
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._sample_until_stopped, daemon=True)
         self._thread.start()
 
     def check_ram(self) -> tuple[str, str] | None:
+        if self.tampered:
+            return "killed", (
+                f"changed the memory limit of its own cgroup: {OWN_LIMIT}, "
+                "a job must not change its own limits"
+            )
         return None if self.enforced else super().check_ram()
 
     def _sample_until_stopped(self) -> None:
@@ -196,6 +203,9 @@ class CgroupMonitor(Monitor):
         """Read the scope's counters, returning False once the scope is gone."""
         peak = _read_int(self.path / "memory.peak") or _read_int(self.path / "memory.current")
         self.peak = max(self.peak, peak or 0)
+        if self.enforced and _read_int(self.path / "memory.max") != self.applied:
+            # a vanished file reads as None too, which is only a tamper while the scope exists
+            self.tampered = self.tampered or (self.path / "memory.events").exists()
         try:
             for line in (self.path / "memory.events").read_text().splitlines():
                 name, value = line.split()

@@ -363,3 +363,33 @@ def test_ram_reason_gives_a_peak_only_when_it_is_above_the_limit():
     lagging = limits.ram_reason(200 * M, 150 * M)
     assert lagging.startswith("used more than its RAM limit of 200.0M (stopped by the kernel): ")
     assert "peak" not in lagging
+
+
+def test_a_changed_scope_limit_is_noticed(home, tmp_path):
+    page = os.sysconf("SC_PAGE_SIZE")
+    (tmp_path / "memory.max").write_text(str(100 * M))
+    (tmp_path / "memory.events").write_text("oom_kill 0\n")
+    monitor = limits.CgroupMonitor(starting_job(["true"], ram=100 * M), 1, tmp_path)
+    assert monitor.enforced and monitor.applied % page == 0
+    assert monitor.check_ram() is None
+    (tmp_path / "memory.max").write_text("max\n")
+    monitor.sample()
+    state, reason = monitor.check_ram()
+    assert state == "killed"
+    assert reason.startswith("changed the memory limit of its own cgroup")
+    monitor.finish()
+
+
+def test_job_lifting_its_own_scope_limit_is_killed(cgroups):
+    # the pause lets the supervisor see the applied limit first
+    script = (
+        'sleep 1; echo max > "/sys/fs/cgroup$(sed -n "s/^0:://p" /proc/self/cgroup)/memory.max"; '
+        "sleep 30"
+    )
+    job = starting_job(["sh", "-c", script], ram=200 * M)
+    started = time.monotonic()
+    runner.supervise(job.id)
+    done = ended(job)
+    assert done.state == "killed"
+    assert done.reason.startswith("changed the memory limit of its own cgroup")
+    assert time.monotonic() - started < 10
