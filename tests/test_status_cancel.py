@@ -1,12 +1,32 @@
+import itertools
 import os
+import re
 import time
+from types import SimpleNamespace
 
 import pytest
 
+from proqu import cli
 from proqu.cli import main
 from proqu.store import Store
 
 BASE = ["submit", "--ram", "2G", "--cpus", "2", "--est", "1m", "--max", "5m"]
+
+
+NOW = 1_800_000_000.0
+
+
+@pytest.fixture
+def frozen(monkeypatch):
+    """The command's own clock moves a millisecond per reading, so durations are exact.
+
+    It still moves, so that jobs submitted one after another keep their order.
+    """
+    ticks = itertools.count()
+    clock = SimpleNamespace(
+        time=lambda: NOW + next(ticks) / 1000, sleep=time.sleep, monotonic=time.monotonic
+    )
+    monkeypatch.setattr(cli, "time", clock)
 
 
 def submit(*extra):
@@ -131,20 +151,26 @@ def test_status_hides_the_oldest_finished_jobs(home, capsys):
     assert ids[2] in out and ids[11] in out
 
 
-def test_status_of_running_and_cancelling_jobs(home, capsys):
+def test_status_of_running_and_cancelling_jobs(home, frozen, capsys):
     running = submit()
+    late = submit()
     overdue = submit()
     cancelling = submit()
     store = Store()
-    now = time.time()
+    now = NOW
     with store.locked():
-        store.update(running.id, state="running", started_at=now - 60)
+        store.update(running.id, state="running", started_at=now - 20)
+        store.update(late.id, state="running", started_at=now - 90)
         store.update(overdue.id, state="running", started_at=now - 600)
         store.update(cancelling.id, state="running", started_at=now, cancel_requested=True)
     capsys.readouterr()
     main(["status"])
     out = capsys.readouterr().out
-    assert f"{running.id}: running for 1m, killed in 4m if still running" in out
+    assert (
+        f"{running.id}: running for 20s, expected to finish in about 40s, "
+        "killed in 4m40s if still running"
+    ) in out
+    assert f"{late.id}: running for 1m30s, past its 1m estimate, killed in 3m30s" in out
     assert f"{overdue.id}: running for 10m, past its max runtime" in out
     assert f"{cancelling.id}: running, stopping because you cancelled it" in out
 
@@ -184,3 +210,48 @@ def test_detail_lines(home, capsys):
     assert f"waits for: {parent.id}" in out
     assert "exit code: 3" in out
     assert "peak RAM: 1.0G" in out
+
+
+def test_status_shows_places_of_queued_jobs(home, frozen, capsys, monkeypatch):
+    monkeypatch.setenv("PROQU_SESSION", "s2")
+    theirs = submit("--cpus", "4", "--name", "theirs", "--bid", "77")
+    monkeypatch.setenv("PROQU_SESSION", "s1")
+    first = submit("--cpus", "4")
+    second = submit("--cpus", "4")
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "position 1 in the queue" not in out
+    assert "position 2 in the queue, expected to start in 1m and finish in 2m" in out
+    assert "position 3 in the queue, expected to start in 2m and finish in 3m" in out
+    assert main(["status", second.id]) == 0
+    detail = capsys.readouterr().out
+    assert "state: queued for 0s, position 3 in the queue, expected to start in 2m" in detail
+    for text in (out, detail):
+        # ids are hex, so a bare 77 can only be the other session's bid
+        assert theirs.id not in text and "theirs" not in text
+        assert not re.search(r"\b77\b", text)
+    assert first.id in out
+
+
+def test_status_of_a_job_with_no_projection(home, frozen, capsys):
+    job = submit()
+    store = Store()
+    with store.locked():
+        store.update(job.id, after=["ffffff"])
+    capsys.readouterr()
+    main(["status"])
+    out = capsys.readouterr().out
+    assert (
+        f"{job.id}: queued for 0s, position 1 in the queue, no start time can be projected" in out
+    )
+
+
+def test_starting_job_shows_no_expected_finish(home, capsys):
+    job = submit()
+    store = Store()
+    with store.locked():
+        store.update(job.id, state="starting")
+    capsys.readouterr()
+    main(["status"])
+    assert f"{job.id}: starting\n" in capsys.readouterr().out
