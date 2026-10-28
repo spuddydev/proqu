@@ -94,13 +94,15 @@ def test_job_with_a_missing_cwd(home, tmp_path):
 
 
 def test_leftover_processes_are_stopped_before_the_job_ends(home):
-    job = starting_job(["sh", "-c", "sleep 30 & echo $! ; setsid sleep 30 & echo $!"])
+    # macOS has no setsid command, so Python leaves the session itself
+    leave = f"{sys.executable} -c 'import os, time; os.setsid(); time.sleep(30)'"
+    job = starting_job(["sh", "-c", f"sleep 30 & echo $! ; {leave} & echo $!"])
     runner.supervise(job.id)
     pids = [int(pid) for pid in log_of(job).split()]
+    assert len(pids) == 2
     assert ended(job).state == "succeeded"
     for pid in pids:
-        state = procs._stat_fields(pid)
-        assert state is None or state[0] in ("Z", "X")
+        assert not procs.is_alive(pid, procs.start_ticks(pid))
 
 
 def test_only_starting_jobs_are_run(home):
