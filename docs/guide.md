@@ -281,6 +281,9 @@ Every kill is reported with the limit and what was measured. A kill is always th
 | Used a GPU without asking for one | Resubmit with `--gpus` and `--vram`. |
 | Used a GPU that was not given to it | Use only the GPUs in `CUDA_VISIBLE_DEVICES`. |
 | Used more GPU memory than its `--vram` | Measure with `nvidia-smi` and resubmit with the real figure. |
+| Changed the memory limit of its own cgroup | A job must not change its own limits. Remove that from the job. |
+
+In cgroup mode a job that dies of SIGKILL while its peak RAM was at least 90% of its limit is also reported as a RAM kill, whoever sent the signal.
 
 Jobs can also end without being killed:
 
@@ -288,8 +291,11 @@ Jobs can also end without being killed:
 | --- | --- |
 | failed, exited with code N | The command failed. Read the log. |
 | failed, terminated by signal | Something sent the job a signal. |
-| failed, could not start | The program or directory was not found. |
-| failed, supervisor lost | The machine restarted or proqu crashed. Not the job's fault. Resubmit. |
+| failed, could not start | The program or directory was not found, or its CPUs were no longer available on the machine. |
+| failed, could not start its supervisor | proqu could not launch the process that watches the job. Resubmit. |
+| failed, its cgroup was too slow to start | The job was stopped because it might have half started. Resubmit. |
+| failed, could not be stopped | Its processes may be stuck in the kernel. Look at the machine, then resubmit. |
+| failed, supervisor lost | The machine restarted or proqu crashed. Not the job's fault. Resubmit. A job that was running keeps its bid spent. |
 | failed, a job it waits for ended | A dependency did not succeed. |
 | failed, limits were lowered | The owner lowered the limits below its request while it queued. |
 | cancelled | You or the user cancelled it. |
