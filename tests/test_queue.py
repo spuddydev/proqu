@@ -117,3 +117,59 @@ def test_passes_inside_a_job_do_not_start_jobs(queue, monkeypatch):
     monkeypatch.delenv("PROQU_JOB_ID")
     tick.tick()
     assert settle([job.id])[0].state == "succeeded"
+
+
+def test_first_pass_is_not_taken_for_a_restart(queue):
+    job = submit(command=("sleep", "2"))
+    (queue / "state" / "boot_id").unlink()
+    tick.tick()
+    assert Store().get(job.id).state in ("starting", "running")
+
+
+def test_lost_starting_job_gets_its_bid_back(queue):
+    store = Store()
+    job = submit("--bid", "200", command=("sleep", "30"))
+    tick.kill_leftovers([job.id])
+    with store.locked():
+        store.update(job.id, state="starting", supervisor_pid=1, supervisor_start=0)
+    tick.tick(store)
+    assert store.get(job.id).reason == tick.LOST
+    assert store.bid_spent("s1") == 0
+
+
+def test_cancelling_a_parent_fails_its_dependant_at_once(queue, capsys):
+    blocker = submit("--ram", "4G", command=("sleep", "30"))
+    parent = submit("--ram", "4G", command=("true",))
+    child = submit("--after", parent.id, command=("true",))
+    assert main(["cancel", parent.id]) == 0
+    assert Store().get(child.id).state == "failed"
+    main(["cancel", blocker.id])
+
+
+def test_submit_says_whether_the_job_started(queue, capsys):
+    submit(command=("true",))
+    assert "Started job" in capsys.readouterr().out
+
+
+def test_submit_reports_a_job_failed_at_once(queue, capsys):
+    parent = submit(command=("sh", "-c", "exit 1"))
+    settle([parent.id])
+    capsys.readouterr()
+    store = Store()
+    with store.locked():
+        store.update(parent.id, state="running", supervisor_pid=1, supervisor_start=0)
+    request = ["submit", "--ram", "1G", "--cpus", "1", "--est", "2s", "--max", "30s"]
+    assert main([*request, "--after", parent.id, "--", "true"]) == 1
+    assert "failed at once" in capsys.readouterr().out
+
+
+def test_failed_pass_does_not_fail_the_submit(queue, capsys, monkeypatch):
+    from proqu.store import LockTimeout
+
+    def busy(store=None):
+        raise LockTimeout("busy")
+
+    monkeypatch.setattr(tick, "tick", busy)
+    request = ["submit", "--ram", "1G", "--cpus", "1", "--est", "2s", "--max", "30s"]
+    assert main([*request, "--", "true"]) == 0
+    assert "could not be moved on just now" in capsys.readouterr().err
