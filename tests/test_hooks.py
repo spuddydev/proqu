@@ -251,6 +251,24 @@ def test_a_job_reported_while_a_hook_waits_for_the_lock_is_not_reported_twice(
     assert hook("prompt", {"session_id": SESSION}, capsys) == (0, None, "")
 
 
+def test_a_held_database_write_lock_gives_up_quickly(home, capsys, monkeypatch):
+    import sqlite3
+
+    add("succeeded")
+    monkeypatch.setattr(hooks, "LOCK_TIMEOUT", 0.2)
+    blocker = sqlite3.connect(paths.db_path(), isolation_level=None)
+    blocker.execute("BEGIN IMMEDIATE")
+    try:
+        started = time.monotonic()
+        code, output, err = hook("prompt", {"session_id": SESSION}, capsys)
+        took = time.monotonic() - started
+    finally:
+        blocker.close()
+    assert took < 3
+    assert (code, output) == (0, None)
+    assert "locked" in err
+
+
 # never break the session
 
 
