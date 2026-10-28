@@ -13,6 +13,13 @@ FAKE_MACHINE = machine.Machine(
 )
 
 
+@pytest.fixture(autouse=True)
+def private_state(tmp_path_factory, monkeypatch):
+    """No test may read or write the real queue, whatever it forgets to set."""
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path_factory.mktemp("state")))
+    monkeypatch.delenv("PROQU_SESSION", raising=False)
+
+
 @pytest.fixture
 def home(tmp_path, monkeypatch):
     """A private state directory, a fixed session and a fake machine."""
