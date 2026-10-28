@@ -69,6 +69,10 @@ class LockTimeout(Exception):
     pass
 
 
+class StoreError(Exception):
+    pass
+
+
 # columns held as JSON text in the database
 _JSON = ("argv", "env", "after", "cpu_ids", "gpu_ids")
 
@@ -131,16 +135,43 @@ class Store:
         self.lock_timeout = lock_timeout
         self.db = db or paths.db_path()
         self.lock_file = lock or paths.lock_path()
-        self.conn = sqlite3.connect(self.db, timeout=30, isolation_level=None)
+        try:
+            self.conn = sqlite3.connect(self.db, timeout=30, isolation_level=None)
+        except sqlite3.Error as error:
+            raise StoreError(f"cannot open queue database {self.db}: {error}") from None
         self.conn.row_factory = sqlite3.Row
-        self.conn.execute("PRAGMA busy_timeout = 30000")
-        # executescript commits on its own, so the schema is made under the
-        # file lock alone rather than inside a transaction
-        with self._flock():
-            if self.conn.execute("PRAGMA user_version").fetchone()[0] == 0:
-                self.conn.executescript(SCHEMA)
-                self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        try:
+            if self._version() == 0:
+                with self._flock():
+                    if self._version() == 0:
+                        self._create()
+            version = self._version()
+        except sqlite3.DatabaseError as error:
+            raise StoreError(
+                f"queue database {self.db} is damaged ({error}), move it aside to start afresh"
+            ) from None
+        if version != SCHEMA_VERSION:
+            raise StoreError(
+                f"queue database {self.db} has version {version}, this proqu understands "
+                f"{SCHEMA_VERSION}: update proqu"
+            )
+
+    def _version(self) -> int:
+        return self.conn.execute("PRAGMA user_version").fetchone()[0]
+
+    def _create(self) -> None:
+        """Create the schema in one transaction, so a crash leaves nothing half made."""
         self.conn.execute("PRAGMA journal_mode = WAL")
+        self.conn.execute("BEGIN IMMEDIATE")
+        try:
+            for statement in SCHEMA.split(";"):
+                if statement.strip():
+                    self.conn.execute(statement)
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        except BaseException:
+            self.conn.execute("ROLLBACK")
+            raise
+        self.conn.execute("COMMIT")
 
     def close(self) -> None:
         self.conn.close()
@@ -186,6 +217,8 @@ class Store:
         self.conn.execute(f"INSERT INTO jobs ({names}) VALUES ({marks})", row)
 
     def update(self, job_id: str, **changes) -> None:
+        if not changes:
+            return
         unknown = set(changes) - set(_COLUMNS)
         if unknown:
             raise KeyError(f"unknown job fields {sorted(unknown)}")

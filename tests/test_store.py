@@ -1,9 +1,11 @@
 import multiprocessing
+import sqlite3
 import time
 
 import pytest
 
-from proqu.store import Job, LockTimeout, Store
+from proqu import store as store_module
+from proqu.store import Job, LockTimeout, Store, StoreError
 
 
 def make_job(store, session="s1", bid=0, **changes):
@@ -151,3 +153,106 @@ def test_concurrent_writers_never_collide(tmp_path, monkeypatch):
     jobs = store.for_session("s1")
     assert len({job.id for job in jobs}) == 100
     assert store.bid_spent("s1") == 700
+
+
+def test_database_uses_wal(store):
+    assert store.conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_half_made_schema_is_impossible(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path))
+    broken = "CREATE TABLE jobs (id TEXT); CREATE TABLE nonsense"
+    monkeypatch.setattr(store_module, "SCHEMA", broken)
+    with pytest.raises(StoreError):
+        Store()
+    monkeypatch.undo()
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path))
+    Store().close()
+
+
+def test_newer_database_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path))
+    Store().close()
+    conn = sqlite3.connect(tmp_path / "proqu.db")
+    conn.execute("PRAGMA user_version = 99")
+    conn.close()
+    with pytest.raises(StoreError, match="update proqu"):
+        Store()
+
+
+def test_damaged_database_is_reported(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path))
+    (tmp_path / "proqu.db").write_bytes(b"this is not a database at all" * 100)
+    with pytest.raises(StoreError, match="damaged"):
+        Store()
+
+
+def test_opening_needs_no_lock(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path))
+    holder = Store()
+    with holder.locked():
+        Store(lock_timeout=0.1).close()
+
+
+def test_active_skips_finished_jobs_in_order(store):
+    first = make_job(store, submitted_at=1)
+    second = make_job(store, submitted_at=2)
+    done = make_job(store, submitted_at=0, state="succeeded")
+    with store.locked():
+        for job in (second, done, first):
+            store.insert(job)
+        store.update(second.id, state="running")
+    assert [job.id for job in store.active()] == [first.id, second.id]
+
+
+def test_states_return_only_the_asked_ids(store):
+    jobs = [make_job(store) for _ in range(3)]
+    with store.locked():
+        for job in jobs:
+            store.insert(job)
+        store.update(jobs[1].id, state="failed")
+    assert store.states([jobs[0].id, jobs[1].id]) == {jobs[0].id: "queued", jobs[1].id: "failed"}
+
+
+def test_waiters_belong_to_their_job(store):
+    with store.locked():
+        store.add_waiter("aaa", 10, 1)
+        store.add_waiter("bbb", 10, 2)
+        store.add_waiter("aaa", 10, 3)
+    assert store.waiters("aaa") == [(10, 3)]
+    assert store.waiters("bbb") == [(10, 2)]
+
+
+def test_update_round_trips_every_kind_of_field(store):
+    job = make_job(store)
+    with store.locked():
+        store.insert(job)
+        store.update(job.id, cpu_ids=[2, 3], cancel_requested=True, notified=True, peak_ram=5)
+        store.update(job.id)
+    stored = store.get(job.id)
+    assert stored.cpu_ids == [2, 3]
+    assert stored.cancel_requested is True
+    assert stored.notified is True
+    assert stored.peak_ram == 5
+
+
+def test_transition_and_refund_roll_back_together(store):
+    job = make_job(store, bid=50)
+    with store.locked():
+        store.insert(job)
+        store.add_bid_spent("s1", 50)
+    with pytest.raises(RuntimeError), store.locked():
+        assert store.transition(job.id, ("queued",), "cancelled")
+        store.add_bid_spent("s1", -50)
+        raise RuntimeError
+    assert store.get(job.id).state == "queued"
+    assert store.bid_spent("s1") == 50
+
+
+def test_new_id_skips_taken_ids(store, monkeypatch):
+    job = make_job(store, id="aaaaaa")
+    with store.locked():
+        store.insert(job)
+    ids = iter(["aaaaaa", "bbbbbb"])
+    monkeypatch.setattr(store_module.secrets, "token_hex", lambda n: next(ids))
+    assert store.new_id() == "bbbbbb"
