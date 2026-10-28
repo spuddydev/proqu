@@ -176,3 +176,46 @@ def test_concurrent_snapshots_do_not_crash(tmp_path):
         worker.join()
         assert worker.exitcode == 0
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_cgroup_limit_above_physical_ram_is_ignored(tmp_path):
+    proc = fake_proc(tmp_path, "0::/box")
+    root = tmp_path / "cg"
+    (root / "box").mkdir(parents=True)
+    (root / "box" / "memory.max").write_text(str(64 * 1024**3))
+    assert machine.detect_ram(proc, root) == 16 * 1024**3
+
+
+def test_cgroup_v1_reads_only_the_memory_controller(tmp_path):
+    proc = fake_proc(tmp_path, "5:cpu,cpuacct:/x\n4:memory:/")
+    root = tmp_path / "cg"
+    (root / "memory").mkdir(parents=True)
+    (root / "memory" / "memory.limit_in_bytes").write_text(str(2 * 1024**3))
+    (root / "cpu,cpuacct" / "x").mkdir(parents=True)
+    (root / "cpu,cpuacct" / "x" / "memory.limit_in_bytes").write_text(str(1024**3))
+    assert machine.detect_ram(proc, root) == 2 * 1024**3
+
+
+def test_cpu_quota_trims_a_known_cpu_set(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1, 2, 3, 4, 5, 6, 7})
+    proc = fake_proc(tmp_path, "0::/box")
+    root = tmp_path / "cg"
+    (root / "box").mkdir(parents=True)
+    (root / "box" / "cpu.max").write_text("250000 100000\n")
+    assert machine.detect_cpus(proc, root) == (0, 1, 2)
+
+
+def test_absent_nvidia_smi_clears_previous_gpus(tmp_path, monkeypatch):
+    monkeypatch.setenv("PATH", str(tmp_path))
+    previous = machine.Machine(1, (0,), (machine.GpuInfo(0, "GPU-aaa", 1024**3),))
+    assert machine.detect(previous).gpus == ()
+
+
+def test_snapshot_passes_previous_gpus_on(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("PROQU_JOB_ID", raising=False)
+    first = machine.snapshot()
+    seen = []
+    monkeypatch.setattr(machine, "detect", lambda previous=None: seen.append(previous) or first)
+    machine.snapshot(refresh=True)
+    assert seen == [first]

@@ -174,3 +174,20 @@ def test_vram_limit_never_raises_a_smaller_gpu():
 )
 def test_describe(key, value, shown):
     assert config.describe(key, value) == shown
+
+
+def test_state_dir_owned_by_someone_else_is_refused(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path / "state"))
+    monkeypatch.setattr(paths.os, "geteuid", lambda: 12345)
+    with pytest.raises(paths.StateDirError, match="belongs to another user"):
+        paths.state_dir()
+
+
+def test_files_in_state_dir_are_private(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path / "state"))
+    import os
+
+    os.umask(0o022)
+    path = paths.config_path()
+    config.save(path, {"ram": 5})
+    assert path.stat().st_mode & 0o077 == 0
