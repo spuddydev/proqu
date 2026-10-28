@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pytest
 
 from proqu.scheduler import (
@@ -757,3 +759,58 @@ def test_a_long_job_over_the_gpu_share_runs_alone():
     # and while it runs, no other long job starts, even one without a GPU
     assert started(share_run(one, running, [q("long", mx=DAY)])) == []
     assert started(share_run(one, running, [q("short", mx=60)])) == ["short"]
+
+
+# A job held too long
+
+
+def hold_run(queued, free, hold_limit=1800):
+    return plan(L8, [], queued, {}, NOW, 10, free=free, hold_limit=hold_limit)
+
+
+def held_q(id, ram, t, since):
+    return replace(q(id, ram=ram, t=t), held_since=since)
+
+
+def test_later_job_may_pass_a_held_one_before_the_hold_limit():
+    queued = [held_q("big", 6, 1, NOW - 1799), q("small", ram=1, t=2)]
+    p = hold_run(queued, Free(3 * G))
+    assert started(p) == ["small"]
+    assert p.held == {"big": "ram"}
+
+
+def test_no_later_job_may_pass_a_job_held_past_the_hold_limit():
+    queued = [held_q("big", 6, 1, NOW - 1801), q("small", ram=1, t=2), q("tiny", ram=1, t=3)]
+    p = hold_run(queued, Free(3 * G))
+    assert started(p) == []
+    assert p.held == {"big": "overdue-ram", "small": "behind", "tiny": "behind"}
+
+
+def test_jobs_ahead_of_an_overdue_job_still_start():
+    queued = [q("first", ram=1, t=0), held_q("big", 6, 1, NOW - 7200), q("small", ram=1, t=2)]
+    p = hold_run(queued, Free(3 * G))
+    assert started(p) == ["first"]
+    assert p.held == {"big": "overdue-ram", "small": "behind"}
+
+
+def test_a_job_held_exactly_the_hold_limit_may_still_be_passed():
+    queued = [held_q("big", 6, 1, NOW - 1800), q("small", ram=1, t=2)]
+    assert started(hold_run(queued, Free(3 * G))) == ["small"]
+
+
+def test_a_hold_limit_of_zero_never_stops_later_jobs():
+    queued = [held_q("big", 6, 1, NOW - 86_400), q("small", ram=1, t=2)]
+    assert started(hold_run(queued, Free(3 * G), hold_limit=0)) == ["small"]
+
+
+def test_overdue_job_starts_once_the_memory_is_free():
+    queued = [held_q("big", 6, 1, NOW - 7200), q("small", ram=1, t=2)]
+    p = hold_run(queued, Free(8 * G))
+    assert started(p) == ["big", "small"]
+    assert p.held == {}
+
+
+def test_hold_time_matters_only_while_the_job_is_held():
+    # without free memory nothing is held, so an old hold time stops nothing
+    queued = [held_q("big", 6, 1, NOW - 7200), q("small", ram=1, t=2)]
+    assert started(plan(L8, [], queued, {}, NOW, 10, hold_limit=1800)) == ["big", "small"]

@@ -4,7 +4,7 @@ import time
 
 import pytest
 
-from proqu import procs, runner
+from proqu import machine, procs, runner
 from proqu.store import Job, Store
 
 
@@ -27,7 +27,7 @@ def starting_job(argv, cwd="/", **changes):
         after=[],
         submitted_at=time.time(),
         state="starting",
-        cpu_ids=[sorted(os.sched_getaffinity(0))[0]],
+        cpu_ids=[sorted(machine.available_cpus())[0]],
     )
     values.update(changes)
     job = Job(**values)
@@ -57,7 +57,8 @@ def test_successful_job_runs_in_its_cwd_with_its_env(home, tmp_path):
     assert log_of(job).split() == [str(tmp_path), job.id, "[]"]
 
 
-@pytest.mark.skipif(len(os.sched_getaffinity(0)) < 2, reason="needs two CPUs")
+@pytest.mark.skipif(not hasattr(os, "sched_setaffinity"), reason="needs CPU pinning")
+@pytest.mark.skipif(len(machine.available_cpus()) < 2, reason="needs two CPUs")
 def test_job_is_pinned_to_its_cpus(home):
     cpu = sorted(os.sched_getaffinity(0))[-1]
     job = starting_job(["sh", "-c", "grep Cpus_allowed_list /proc/self/status"], cpu_ids=[cpu])
@@ -93,13 +94,15 @@ def test_job_with_a_missing_cwd(home, tmp_path):
 
 
 def test_leftover_processes_are_stopped_before_the_job_ends(home):
-    job = starting_job(["sh", "-c", "sleep 30 & echo $! ; setsid sleep 30 & echo $!"])
+    # macOS has no setsid command, so Python leaves the session itself
+    leave = f"{sys.executable} -c 'import os, time; os.setsid(); time.sleep(30)'"
+    job = starting_job(["sh", "-c", f"sleep 30 & echo $! ; {leave} & echo $!"])
     runner.supervise(job.id)
     pids = [int(pid) for pid in log_of(job).split()]
+    assert len(pids) == 2
     assert ended(job).state == "succeeded"
     for pid in pids:
-        state = procs._stat_fields(pid)
-        assert state is None or state[0] in ("Z", "X")
+        assert not procs.is_alive(pid, procs.start_ticks(pid))
 
 
 def test_only_starting_jobs_are_run(home):

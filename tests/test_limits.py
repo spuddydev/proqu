@@ -61,6 +61,8 @@ def test_children_count_towards_the_limit(home):
 
 
 REAL_PROBE = limits.cgroups_available
+# the cgroup probe and its cache exist only on Linux, macOS has no cgroups
+PROBES = pytest.mark.skipif(sys.platform == "darwin", reason="no cgroups on macOS")
 
 
 @pytest.fixture
@@ -115,6 +117,7 @@ def test_failing_systemd_run_falls_back_to_watching(home, monkeypatch, tmp_path,
     assert "systemd-run did not start the job in a cgroup" in capsys.readouterr().out
 
 
+@PROBES
 def test_probe_result_is_cached(home, monkeypatch):
     monkeypatch.setattr(limits, "cgroups_available", REAL_PROBE)
     calls = []
@@ -123,6 +126,7 @@ def test_probe_result_is_cached(home, monkeypatch):
     assert calls == [1]
 
 
+@PROBES
 def test_a_failed_launch_makes_the_next_job_probe_again(home, monkeypatch):
     monkeypatch.setattr(limits, "cgroups_available", REAL_PROBE)
     calls = []
@@ -324,6 +328,7 @@ def test_cancel_stops_a_job_in_a_scope(cgroups):
     assert time.monotonic() - started < 10
 
 
+@PROBES
 def test_probe_result_expires(home, monkeypatch):
     monkeypatch.setattr(limits, "cgroups_available", REAL_PROBE)
     calls = []

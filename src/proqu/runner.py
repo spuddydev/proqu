@@ -7,6 +7,7 @@ how it ended and then lets the queue move on.
 
 import contextlib
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -17,8 +18,9 @@ from proqu import config, limits, machine, paths, procs
 from proqu.store import Job, Store
 from proqu.units import format_duration
 
-# how often the supervisor looks at its job
-POLL = 1.0
+# how often the supervisor looks at its job. macOS has no kernel limit on RAM, so
+# its watch must catch a growing job sooner, and asking the kernel there is cheap
+POLL = 0.25 if sys.platform == "darwin" else 1.0
 # how long to keep killing a job's processes before giving up on stragglers
 MEMBER_WAIT = 10.0
 
@@ -131,7 +133,7 @@ def _end_unstarted(store: Store, job: Job, state: str, reason: str) -> None:
 
 
 def _check_cpus(job: Job) -> None:
-    missing = set(job.cpu_ids) - os.sched_getaffinity(0)
+    missing = set(job.cpu_ids) - machine.available_cpus()
     if missing:
         raise ValueError(f"its CPUs {sorted(missing)} are no longer available on this machine")
 
@@ -173,7 +175,25 @@ def start(job: Job, log) -> tuple[subprocess.Popen, limits.Monitor]:
             flush=True,
         )
     proc = launch(job, log, job.argv)
+    keep_awake(proc.pid)
     return proc, limits.Monitor(job, proc.pid, uuids)
+
+
+def keep_awake(pid: int) -> None:
+    """Keep a Mac from idle sleep while the job runs, as sleep would pause it but not its clock.
+
+    caffeinate ends by itself when the job's first process does. A failure only
+    means the Mac may sleep, which is no reason to stop the job.
+    """
+    if sys.platform != "darwin" or not shutil.which("caffeinate"):
+        return
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.Popen(
+            ["caffeinate", "-i", "-w", str(pid)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
 
 def gpu_uuids(job: Job) -> tuple[str, ...]:
@@ -207,11 +227,41 @@ def _check_runnable(job: Job) -> None:
     raise FileNotFoundError(2, "No such file or directory", program)
 
 
+# variables that also choose AMD GPUs, each filtering what the one before it left
+# visible, so a job given GPUs by ROCR_VISIBLE_DEVICES must not inherit them
+AMD_FILTERS = ("HIP_VISIBLE_DEVICES", "CUDA_VISIBLE_DEVICES", "GPU_DEVICE_ORDINAL")
+# hides every GPU: no device has this index
+NO_GPU = "-1"
+
+
+def gpu_env(job: Job, env: dict[str, str]) -> None:
+    """Show the job its own GPUs only, in the way its GPUs' vendor reads."""
+    vendor = machine.gpu_vendor(machine.snapshot())
+    if vendor == "apple":
+        # Metal has no such variable, a job without a GPU is trusted not to use it
+        return
+    if vendor != "amd":
+        env["CUDA_VISIBLE_DEVICES"] = ",".join(gpu_uuids(job))
+        return
+    if not job.gpu_ids:
+        # every filter hides every GPU, so stacking them does no harm
+        for name in ("ROCR_VISIBLE_DEVICES", *AMD_FILTERS):
+            env[name] = NO_GPU
+        return
+    for name in AMD_FILTERS:
+        env.pop(name, None)
+    # an index counts the GPUs the runtime sees, so a uuid is safer when there is one
+    env["ROCR_VISIBLE_DEVICES"] = ",".join(
+        uuid if uuid.startswith("GPU-") else str(index)
+        for index, uuid in zip(job.gpu_ids, gpu_uuids(job), strict=True)
+    )
+
+
 def launch(job: Job, log, argv: list[str]) -> subprocess.Popen:
-    """Start a command for the job in its own session, pinned to its CPUs."""
+    """Start a command for the job in its own session, pinned to its CPUs where it can be."""
     env = dict(job.env)
     env["PROQU_JOB_ID"] = job.id
-    env["CUDA_VISIBLE_DEVICES"] = ",".join(gpu_uuids(job))
+    gpu_env(job, env)
     cpu_ids = set(job.cpu_ids)
 
     def pin() -> None:
@@ -228,7 +278,8 @@ def launch(job: Job, log, argv: list[str]) -> subprocess.Popen:
         stdout=log,
         stderr=subprocess.STDOUT,
         start_new_session=True,
-        preexec_fn=pin,
+        # macOS cannot pin a process to CPUs, so there a job's CPUs are only counted
+        preexec_fn=pin if hasattr(os, "sched_setaffinity") else None,
     )
 
 

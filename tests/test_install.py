@@ -2,6 +2,7 @@ import io
 import json
 import os
 import subprocess
+import sys
 import tarfile
 from pathlib import Path
 
@@ -48,7 +49,10 @@ def fake_claude(tmp_path, marketplace=None, update_fails=False):
 def install(tmp_path, path_dirs=(), **extra):
     env = {
         "HOME": str(tmp_path / "home"),
-        "PATH": os.pathsep.join([*map(str, path_dirs), "/usr/bin", "/bin"]),
+        # the Python running the tests first, as the system one may be too old, as on macOS
+        "PATH": os.pathsep.join(
+            [*map(str, path_dirs), os.path.dirname(sys.executable), "/usr/bin", "/bin"]
+        ),
         "PROQU_ARCHIVE": str(archive(tmp_path)),
         **extra,
     }
@@ -147,3 +151,22 @@ def test_release_archive_holds_the_plugin_and_no_dev_files():
     assert launcher.mode & 0o111
     assert not any(name.startswith(("proqu/tests", "proqu/.claude/")) for name in names)
     assert "proqu/CLAUDE.md" not in names
+
+
+def fake_uname(tmp_path, name):
+    folder = tmp_path / "unamebin"
+    folder.mkdir(exist_ok=True)
+    (folder / "uname").write_text(f"#!/bin/sh\necho {name}\n")
+    (folder / "uname").chmod(0o755)
+    return folder
+
+
+def test_install_runs_on_macos(tmp_path):
+    result = install(tmp_path, [fake_uname(tmp_path, "Darwin")], PROQU_NO_PLUGIN="1")
+    assert result.returncode == 0, result.stderr
+
+
+def test_install_refuses_other_systems(tmp_path):
+    result = install(tmp_path, [fake_uname(tmp_path, "FreeBSD")], PROQU_NO_PLUGIN="1")
+    assert result.returncode == 1
+    assert "only Linux and macOS are supported for now, this is FreeBSD" in result.stderr
