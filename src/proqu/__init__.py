@@ -1,2 +1,5 @@
-def main() -> None:
-    print("Hello from proqu!")
+"""proqu: a shared compute queue for coding agents."""
+
+from proqu.cli import main
+
+__all__ = ["main"]
