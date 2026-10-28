@@ -36,6 +36,7 @@ def outlook(
     delay_cap: float,
     now: float,
     held: dict[str, str] | None = None,
+    share: scheduler.Share | None = None,
 ) -> dict[str, Place]:
     """The place of each of a session's queued jobs, from the inputs a scheduling pass uses.
 
@@ -51,7 +52,9 @@ def outlook(
     running = [ticking.to_running(job, now) for job in active if job.state != "queued"]
     queued = [ticking.to_queued(job) for job in active if job.state == "queued"]
     states = ticking.dependency_states(store, active)
-    projected = scheduler.project(limits, running, queued, states, now, aging, delay_cap)
+    projected = scheduler.project(
+        limits, running, queued, states, now, aging, delay_cap, share=share
+    )
     own = {job.id for job in active if job.session == session}
     places = {}
     for position, job in enumerate(scheduler.order(queued, aging, delay_cap), 1):

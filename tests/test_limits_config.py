@@ -202,3 +202,21 @@ def test_limits_leave_out_the_length_delay_when_aging_is_off(home, capsys):
 def test_config_show_the_length_delay(home, capsys):
     main(["config", "show"])
     assert "length_delay_cap = 4h" in capsys.readouterr().out
+
+
+def test_limits_describe_the_long_job_share(home, capsys):
+    main(["limits"])
+    out = capsys.readouterr().out
+    assert "Jobs with a --max over 12h are long." in out
+    assert "at most 75% of RAM" in out
+    main(["config", "set", "long_job_share", "100"])
+    capsys.readouterr()
+    main(["limits"])
+    assert "are long" not in capsys.readouterr().out
+
+
+def test_config_show_the_long_job_share(home, capsys):
+    main(["config", "show"])
+    out = capsys.readouterr().out
+    assert "long_job_after = 12h" in out
+    assert "long_job_share = 75%" in out

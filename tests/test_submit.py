@@ -293,3 +293,14 @@ def test_request_over_a_config_limit_does_not_blame_the_reserve(home, capsys):
 def test_request_inside_the_reserved_limits_is_accepted(home):
     reserve_on()
     assert submit("--ram", "14G", "--cpus", "3") == 0
+
+
+def test_a_long_job_is_told_about_the_long_job_share(home, capsys):
+    assert submit("--cpus", "4", "--max", "13h") == 0
+    out = capsys.readouterr().out
+    assert "Long job: long jobs together may hold at most 75% of RAM" in out
+    assert submit("--cpus", "4", "--max", "12h") == 0
+    assert "Long job:" not in capsys.readouterr().out
+    main(["config", "set", "long_job_share", "100"])
+    assert submit("--cpus", "4", "--max", "13h") == 0
+    assert "Long job:" not in capsys.readouterr().out
