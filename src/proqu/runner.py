@@ -13,7 +13,7 @@ import sys
 import time
 from pathlib import Path
 
-from proqu import config, machine, paths, procs
+from proqu import config, limits, machine, paths, procs
 from proqu.store import Job, Store
 from proqu.units import format_duration
 
@@ -103,6 +103,7 @@ def _supervise(store: Store, job_id: str) -> None:
             with store.locked():
                 _end_unstarted(store, job, "failed", f"could not start: {_describe(error)}")
             return
+    monitor = limits.Monitor(job, proc.pid)
     outcome = None
     running = False
     try:
@@ -111,14 +112,14 @@ def _supervise(store: Store, job_id: str) -> None:
                 job_id, ("starting",), "running", job_pid=proc.pid, started_at=time.time()
             )
         if running:
-            outcome = watch(store, job, proc)
+            outcome = watch(store, job, proc, monitor)
     finally:
         # whatever went wrong above, the job must not outlive its supervisor
         stop_members(job_id, proc.pid, settings.kill_grace)
         code = _reap(proc)
     if running:
-        state, reason = outcome or classify(code)
-        _finish(store, job_id, state, reason, code)
+        state, reason = outcome or monitor.finish() or classify(code)
+        _finish(store, job_id, state, reason, code, monitor.peak)
 
 
 def _end_unstarted(store: Store, job: Job, state: str, reason: str) -> None:
@@ -166,7 +167,9 @@ def launch(job: Job, log) -> subprocess.Popen:
     )
 
 
-def watch(store: Store, job: Job, proc: subprocess.Popen) -> tuple[str, str] | None:
+def watch(
+    store: Store, job: Job, proc: subprocess.Popen, monitor: limits.Monitor
+) -> tuple[str, str] | None:
     """Wait for the job, returning why it had to be stopped, or None if it ended."""
     deadline = time.monotonic() + job.max
     while True:
@@ -187,6 +190,9 @@ def watch(store: Store, job: Job, proc: subprocess.Popen) -> tuple[str, str] | N
                 f"still running at its max runtime of {format_duration(job.max)}: "
                 "if it was making progress, resubmit with a larger --max, otherwise find the hang",
             )
+        broken = monitor.check()
+        if broken:
+            return broken
 
 
 def stop_members(job_id: str, session: int, grace: float) -> None:
@@ -224,7 +230,14 @@ def classify(code: int | None) -> tuple[str, str | None]:
     return "failed", f"exited with code {code}"
 
 
-def _finish(store: Store, job_id: str, state: str, reason: str | None, code: int | None) -> None:
+def _finish(
+    store: Store,
+    job_id: str,
+    state: str,
+    reason: str | None,
+    code: int | None,
+    peak: int | None = None,
+) -> None:
     # the first writer wins, so a job already marked lost or cancelled keeps that
     with store.locked():
         store.transition(
@@ -234,6 +247,7 @@ def _finish(store: Store, job_id: str, state: str, reason: str | None, code: int
             reason=reason,
             exit_code=code,
             ended_at=time.time(),
+            peak_ram=peak or None,
         )
 
 
