@@ -163,7 +163,7 @@ HANDLERS = {"session-start": session_start, "prompt": prompt, "stop": stop}
 
 
 def _open_store() -> Store | None:
-    """The job store, or None when no job was ever submitted on this machine."""
+    """The job store, or None when this user has no queue database yet."""
     if not paths.has_db():
         return None
     store = Store(lock_timeout=LOCK_TIMEOUT)

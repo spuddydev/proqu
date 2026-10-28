@@ -48,7 +48,10 @@ def db_path() -> Path:
 
 
 def has_db() -> bool:
-    """Whether any job was ever submitted, checked without creating state."""
+    """Whether this user's queue database exists, checked without creating state.
+
+    Any command that opens the queue creates it, so this does not mean a job was submitted.
+    """
     return (state_path() / DB_NAME).exists()
 
 
