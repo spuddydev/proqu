@@ -143,6 +143,22 @@ class _Pool:
         return cpu_ids, gpu_ids
 
 
+def _reserve(
+    pool: _Pool, releases: list[tuple[float, _Held]], req: Request, now: float
+) -> tuple[float, _Pool] | None:
+    """The earliest time the request fits as jobs reach their hard end, and the pool then."""
+    pool = pool.copy()
+    releases = sorted(releases, key=lambda r: r[0])
+    for i, (end, held) in enumerate(releases):
+        pool.give(*held)
+        # Release everything ending at the same moment before checking.
+        if i + 1 < len(releases) and releases[i + 1][0] == end:
+            continue
+        if pool.fit(req):
+            return max(end, now), pool
+    return None
+
+
 def plan(
     limits: Limits,
     running: Iterable[Running],
@@ -155,11 +171,30 @@ def plan(
     running = list(running)
     ordered = order(queued, aging_per_minute)
     pool = _Pool(limits, [(r.req, r.cpu_ids, r.gpu_ids) for r in running])
+    releases = [(r.started_at + r.max, (r.req, r.cpu_ids, r.gpu_ids)) for r in running]
     starts = []
+    # The first blocked job: its reserved start, its request and the pool at that time.
+    reserved: tuple[float, Request, _Pool] | None = None
+    blocked = False
     for q in ordered:
         fit = pool.fit(q.req)
         if fit is None:
+            if not blocked:
+                blocked = True
+                # Never None for a job within the limits, as all releases restore them.
+                found = _reserve(pool, releases, q.req, now)
+                if found:
+                    reserved = (found[0], q.req, found[1])
             continue
+        if reserved and now + q.max > reserved[0]:
+            # Runs past the reservation, so it must leave room for the reserved job.
+            at, req, shadow = reserved
+            shadow = shadow.copy()
+            shadow.take(q.req, *fit)
+            if shadow.fit(req) is None:
+                continue
+            reserved = (at, req, shadow)
         pool.take(q.req, *fit)
+        releases.append((now + q.max, (q.req, *fit)))
         starts.append(Start(q.id, *fit))
     return Plan(starts, [])
