@@ -34,7 +34,7 @@ Every request has to be right, because the queue plans around it and enforces it
 
 - `--ram`: peak resident memory of the whole job, children included. Measure it on a small run with `/usr/bin/time -v CMD` (Maximum resident set size) or by watching it, then scale up. A little over is safer than being killed, but large overestimates keep others waiting.
 - `--cpus`: cores the job will really keep busy, for example the `-j` of a build or the worker count of a data loader. Not the core count of the machine.
-- `--gpus` and `--vram`: number of GPUs and memory needed on each, as `nvidia-smi` reports it during a short run. A job that asked for no GPU is killed if it touches one, so set these whenever the code may use CUDA.
+- `--gpus` and `--vram`: number of GPUs and memory needed on each, as `nvidia-smi` reports it during a short run. Give both together, the CLI rejects one without the other. A job that asked for no GPU is killed if it touches one, so set these whenever the code may use CUDA.
 - `--est`: your honest expected runtime. The queue uses it to plan and to show projected start times.
 - `--max`: a generous overestimate, about 1.5 to 3 times `--est`. The job is killed when it reaches max, so a hang cannot hold resources forever. Too tight and a slow run is lost, too loose and it blocks planning.
 
@@ -45,18 +45,20 @@ Check what the queue allows with `proqu limits`. A request over the limit is ref
 1. Submit:
 
    ```
-   proqu submit --ram 6G --cpus 4 [--gpus 1 --vram 10G] --est 20m --max 45m [--name NAME] [--after ID] -- CMD ARGS
+   proqu submit --ram 6G --cpus 4 [--gpus 1 --vram 10G] --est 20m --max 45m [--name NAME] [--after ID] [--bid N] [--cwd DIR] -- CMD ARGS
    ```
 
-   The command after `--` is run directly, without a shell. For pipes, redirects or `&&`, use `-- bash -c '...'`. The working directory and environment are captured at submit, so activate the virtualenv or export variables first. Sizes take `512M`, `6G`, durations take `90s`, `20m`, `2h`, `1h30m`.
+   The command after `--` is run directly, without a shell. For pipes, redirects or `&&`, use `-- bash -c '...'`. The working directory (`--cwd DIR` to choose another) and environment are captured at submit, so activate the virtualenv or export variables first. Sizes take `512M`, `6G`, durations take `90s`, `20m`, `2h`, `1h30m`.
 
 2. Straight away, run `proqu wait <id>` with the Bash tool's `run_in_background` set. You are woken when the job ends, with its outcome and the end of its log. Do not poll `status` in a loop or sleep, the background wait does that for you.
+
+   `proqu wait` exits 0 when the job succeeded and 1 for any other outcome, so a failed or killed job shows up as a failed background command. That is normal, read its output. `proqu wait ID --timeout 30m` stops waiting after that long and exits 3 with the job still going, so run the wait again.
 
 3. Carry on with other work, or end your turn. If you end a turn with a job nobody waits on, you are asked to start a wait or cancel it.
 
 Other commands:
 
-- `proqu status [ID]`: your jobs with queue position, projected start and finish, time left, outcomes and your bid budget.
+- `proqu status [ID] [--all]`: your jobs with queue position, projected start and finish, time left, outcomes and your bid budget. `--all` includes every finished job.
 - `proqu logs ID [--tail N]`: the job's output so far.
 - `proqu cancel ID`: stop a job you no longer need. Do this rather than leaving it queued.
 - `proqu limits`: what the queue may use on this machine.
@@ -87,9 +89,9 @@ The default is no bid, and that is almost always right. With no bids the queue i
 
 Each session has a small bid budget (11000 by default) that is spent at submit. Every queued job gains 10 priority points per minute (by default), so a bid only buys a head start over jobs that were waiting before it.
 
-- Bid only when a person is actively blocked waiting on this result right now.
+- Bid with `--bid N` on submit, and only when a person is actively blocked waiting on this result right now.
 - Never bid to jump the queue for convenience or speed.
-- Bid an honest number from 1 to 10000 in proportion to the real urgency.
+- Bid an honest number up to 10000 in proportion to the real urgency.
 - You cannot see other sessions' bids. Do not try to infer or game them.
 
 ## Subagents
