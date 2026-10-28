@@ -10,7 +10,7 @@ import sqlite3
 import sys
 import time
 
-from proqu import config, hooks, machine, paths, procs, report
+from proqu import config, hooks, machine, paths, procs, report, watch
 from proqu import limits as limits_module
 from proqu import tick as ticking
 from proqu.store import ACTIVE, TERMINAL, Job, LockTimeout, Store, StoreError
@@ -181,10 +181,16 @@ def cmd_submit(args, command: list[str]) -> int:
             place = queue_outlook(store, when, held).get(job.id)
             if place:
                 print(f"{sentence(report.describe_place(place, when))}.")
-    print(
-        f"Next: run `proqu wait {job.id}` as a background command so you are woken when it ends. "
-        f"Check on it with `proqu status {job.id}`."
-    )
+    if watch.is_watched(session):
+        print(
+            "You will be woken when it ends, nothing more to run. "
+            f"Check on it with `proqu status {job.id}`."
+        )
+    else:
+        print(
+            f"Next: run `proqu wait {job.id}` as a background command so you are woken when it "
+            f"ends. Check on it with `proqu status {job.id}`."
+        )
     return 0
 
 
@@ -798,6 +804,9 @@ def build_parser() -> argparse.ArgumentParser:
     configure.set_defaults(handler=cmd_config)
 
     # no help text, so it is left out of the command list the agent reads
+    watching = commands.add_parser("watch")
+    watching.set_defaults(handler=lambda args, command: watch.run())
+
     hook = commands.add_parser("hook")
     hook.add_argument("event", nargs="?", default="", help="session-start, prompt or stop")
     hook.set_defaults(handler=lambda args, command: hooks.run(args.event))
