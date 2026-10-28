@@ -6,6 +6,7 @@ proqu is a queue for heavy jobs. Agents submit a job with what it needs. proqu s
 
 - [Quick start](#quick-start)
 - [Commands](#commands)
+- [What not to queue](#what-not-to-queue)
 - [Scheduling](#scheduling)
 - [Limits](#limits)
 - [Kill reasons](#kill-reasons)
@@ -148,6 +149,15 @@ For the machine's owner. See [Config](#config).
 
 `proqu hook session-start|prompt|stop` is the entry point for the Claude Code hooks. It reads JSON on standard input. Nobody runs it by hand, so it is left out of `proqu --help`.
 
+## What not to queue
+
+The skill tells agents never to queue:
+
+- services, such as dev servers, databases, file watchers or bots. They would hold a slot as long as they live and be killed at their max runtime
+- multi-week jobs
+
+Quick or light work does not belong in the queue either. A multi-day training run does.
+
 ## Scheduling
 
 ### Priority
@@ -288,11 +298,21 @@ Jobs can also end without being killed:
 
 The plugin installs three Claude Code hooks. Each one runs a scheduling pass first. A hook never breaks the session. Any error becomes one line on standard error and the hook exits 0.
 
+To stay quick:
+
+- A hook pass uses only the cached machine snapshot, whatever its age, and never detects the machine. With no snapshot cached the pass is skipped.
+- A hook waits at most 3 seconds for the queue lock.
+- A hook gives up after 8 seconds, inside the 10 second timeout in the plugin.
+- At most 20 jobs are listed in one message, then a line says how many more.
+
+Each job is listed on one line in the same wording as the end of a `proqu wait`: its state and reason, a line starting "Next:" and the command for the end of its log.
+
 ### SessionStart
 
 - Exports `PROQU_SESSION` with the Claude Code session id, so every `proqu` command in the session uses it.
+- If the environment file is missing or cannot be written, it shows the session id and says to put `PROQU_SESSION=ID` in front of every `proqu` command. Without that the commands use the shared `default` session.
 - Reports jobs of the session that finished without being reported.
-- Lists jobs still in the queue and reminds the agent to wait on them.
+- Lists jobs still in the queue and gives the exact `proqu wait ID` command for each.
 
 ### UserPromptSubmit
 
@@ -300,7 +320,7 @@ Reports jobs of the session that finished since the agent last heard. Each outco
 
 ### Stop
 
-Blocks the agent from stopping while the session has an active job that nobody is waiting on, or an outcome not yet reported. The message tells it to run `proqu wait` in the background or cancel the job. It does not block a second time in the same stop.
+Blocks the agent from stopping while the session has an active job that nobody is waiting on, or an outcome not yet reported. The message lists the exact `proqu wait ID` command for each such job, to run in the background, and the exact `proqu cancel ID` command for each. It does not block a second time in the same stop.
 
 ### Sessions
 
