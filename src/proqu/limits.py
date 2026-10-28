@@ -28,6 +28,9 @@ GPU_EVERY = 5.0
 # the longest wait between GPU checks while nvidia-smi keeps failing
 GPU_BACKOFF_MAX = 60.0
 
+# variables systemd-run needs to reach the user's manager
+SCOPE_VARS = ("XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS")
+
 OWN_LIMIT = "this was the job's own limit"
 
 
@@ -318,8 +321,12 @@ def scope_command(job: Job, marker: Path) -> list[str]:
     """The job's command inside its own memory and CPU capped scope.
 
     A small shell step writes the marker before running the job, so the
-    supervisor can tell a job that ran from a scope that was never made.
+    supervisor can tell a job that ran from a scope that was never made. It
+    also drops the variables that only systemd-run needed, so the job sees the
+    environment it was submitted with.
     """
+    added = [name for name in SCOPE_VARS if name not in job.env]
+    unset = f"unset {' '.join(added)}; " if added else ""
     # by full path, because the job's own PATH may not hold it
     return [
         shutil.which("systemd-run") or "systemd-run",
@@ -340,7 +347,7 @@ def scope_command(job: Job, marker: Path) -> list[str]:
         "--",
         "/bin/sh",
         "-c",
-        'printf started > "$0" && exec "$@"',
+        f'printf started > "$0" && {{ {unset}exec "$@"; }}',
         str(marker),
         *job.argv,
     ]

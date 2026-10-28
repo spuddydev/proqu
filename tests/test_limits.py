@@ -393,3 +393,33 @@ def test_job_lifting_its_own_scope_limit_is_killed(cgroups):
     assert done.state == "killed"
     assert done.reason.startswith("changed the memory limit of its own cgroup")
     assert time.monotonic() - started < 10
+
+
+def run_scope_command(job, monkeypatch, tmp_path):
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "systemd-run").write_text(
+        '#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done\nshift\nexec "$@"\n'
+    )
+    (fake / "systemd-run").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    command = limits.scope_command(job, tmp_path / "marker")
+    run = subprocess.run(
+        command, env=limits.scope_env(dict(job.env)), capture_output=True, text=True, check=True
+    )
+    return run.stdout.split()
+
+
+SHOW = 'echo "${XDG_RUNTIME_DIR-unset}" "${DBUS_SESSION_BUS_ADDRESS-unset}"'
+
+
+def test_variables_only_systemd_run_needed_are_not_left_in_the_job(home, monkeypatch, tmp_path):
+    env = {"PATH": os.environ["PATH"]}
+    job = starting_job(["sh", "-c", SHOW], env=env)
+    assert run_scope_command(job, monkeypatch, tmp_path) == ["unset", "unset"]
+
+
+def test_variables_the_job_was_submitted_with_are_kept(home, monkeypatch, tmp_path):
+    env = {"PATH": os.environ["PATH"], "XDG_RUNTIME_DIR": "/run/mine"}
+    job = starting_job(["sh", "-c", SHOW], env=env)
+    assert run_scope_command(job, monkeypatch, tmp_path) == ["/run/mine", "unset"]
