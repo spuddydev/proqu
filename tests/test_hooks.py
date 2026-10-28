@@ -105,7 +105,7 @@ def test_session_start_lists_active_and_unreported_jobs(home, capsys, monkeypatc
     assert f"- job {running.id} (train): running for 2m" in text
     assert f"- job {done.id}: failed: exited with code 3. Next: read the log" in text
     assert f"proqu logs {done.id} --tail 50" in text
-    assert "proqu wait <id>" in text
+    assert f"`proqu wait {running.id}`" in text
     assert other.id not in text
     assert notified(done.id)
 
@@ -150,8 +150,9 @@ def test_stop_blocks_while_a_job_is_unwatched(home, capsys):
     assert (code, err) == (0, "")
     assert output["decision"] == "block"
     assert f"- job {job.id} (sweep): queued" in output["reason"]
-    assert "proqu wait <id>" in output["reason"]
-    assert "proqu cancel <id>" in output["reason"]
+    assert f"`proqu wait {job.id}`" in output["reason"]
+    assert f"`proqu cancel {job.id}`" in output["reason"]
+    assert "<id>" not in output["reason"]
 
 
 def test_stop_allows_when_a_live_waiter_exists(home, capsys):

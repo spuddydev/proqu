@@ -23,10 +23,16 @@ BUDGET = 8
 # jobs listed per message, so a long history cannot flood the agent's context
 SHOWN = 20
 
-WAIT_HINT = (
-    "run `proqu wait <id>` as a background command (Bash with run_in_background) "
-    "so you are woken when it ends"
-)
+
+def _commands(verb: str, jobs: list[Job]) -> str:
+    return ", ".join(f"`proqu {verb} {job.id}`" for job in jobs[:SHOWN])
+
+
+def _wait_hint(jobs: list[Job]) -> str:
+    return (
+        "these as background commands (Bash with run_in_background) so you are "
+        f"woken when each ends: {_commands('wait', jobs)}"
+    )
 
 
 def run(event: str, stdin=None, stdout=None) -> int:
@@ -104,7 +110,7 @@ def session_start(data: dict, session: str) -> dict | None:
     if active:
         lines += ["proqu jobs of this session are still in the queue:"]
         lines += _listed(active, 0)
-        lines += [f"Unless a wait is already running for one, {WAIT_HINT}."]
+        lines += [f"Unless a wait is already running for one, run {_wait_hint(active)}."]
     return _context("SessionStart", lines)
 
 
@@ -142,7 +148,10 @@ def stop(data: dict, session: str) -> dict | None:
     if unwatched:
         lines += ["proqu jobs of this session are not being waited on:"]
         lines += _listed(unwatched, 0)
-        lines += [f"For each, {WAIT_HINT}, or run `proqu cancel <id>` if it is no longer needed."]
+        lines += [
+            f"Run {_wait_hint(unwatched)}. "
+            f"Or cancel any no longer needed: {_commands('cancel', unwatched)}."
+        ]
     if finished:
         lines += ["proqu jobs of this session finished and are not yet reported:"]
         lines += _listed(finished, more)
