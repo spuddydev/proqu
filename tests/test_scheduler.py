@@ -169,8 +169,10 @@ def test_a_large_job_is_not_starved_by_small_ones():
 
 
 def test_a_job_past_its_hard_end_still_holds_a_reservation():
-    running = [r("x", 8, start=NOW - 500, mx=100)]
+    # x is long past its hard end, yet b fits now and is refused only to protect a.
+    running = [r("x", 4, start=NOW - 500, mx=100)]
     assert started(run(L8, running, [q("a", 8, t=1), q("b", 1, t=2, mx=10)])) == []
+    assert started(run(L8, running, [q("b", 1, t=2, mx=10)])) == ["b"]
 
 
 # Dependencies and failures
