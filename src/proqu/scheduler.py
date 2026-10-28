@@ -242,3 +242,43 @@ def plan(
         releases.append((now + q.max, (q.req, *fit)))
         starts.append(Start(q.id, *fit))
     return Plan(starts, [Fail(q.id, doomed[q.id]) for q in ordered if q.id in doomed])
+
+
+def project(
+    limits: Limits,
+    running: Iterable[Running],
+    queued: Iterable[Queued],
+    dep_states: dict[str, str],
+    now: float,
+    aging_per_minute: float,
+) -> dict[str, Projection]:
+    """Expected position, start and end of each queued job that is not about to fail.
+
+    Replays the scheduler at each expected job end, assuming every job takes its estimate
+    and every dependency succeeds. A job that can never start has no entry.
+    """
+    running = list(running)
+    ordered = order(queued, aging_per_minute)
+    position = {q.id: i for i, q in enumerate(ordered, 1)}
+    live = {r.id for r in running} | set(position)
+    doomed = _doomed(limits, live, ordered, dep_states)
+    waiting = {q.id: q for q in ordered if q.id not in doomed}
+    states = dict(dep_states)
+    # A job past its estimate is expected to end now, and never after its hard end.
+    ends = {r.id: max(now, min(r.started_at + r.max, r.started_at + r.est)) for r in running}
+    out = {}
+    t = now
+    while waiting:
+        for s in plan(limits, running, waiting.values(), states, t, aging_per_minute).start:
+            q = waiting.pop(s.id)
+            running.append(Running(q.id, q.req, s.cpu_ids, s.gpu_ids, t, q.est, q.max))
+            ends[q.id] = t + q.est
+            out[q.id] = Projection(position[q.id], t, t + q.est)
+        if not waiting or not running:
+            break
+        t = min(ends[r.id] for r in running)
+        for r in running:
+            if ends[r.id] <= t:
+                states[r.id] = "succeeded"
+        running = [r for r in running if ends[r.id] > t]
+    return out
