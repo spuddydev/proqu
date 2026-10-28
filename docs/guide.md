@@ -109,7 +109,7 @@ Exit codes:
 | 141 | The reader of its output went away (SIGPIPE). |
 | 143 | The wait was stopped with SIGTERM. |
 
-After 3, 4, 129, 130 or 143 the job has not ended and the wait should be run again. A wait that stops early prints how to start it again. The job is not affected.
+After 3, 4, 129, 130, 141 or 143 the job has not ended and the wait should be run again. A wait that stops early prints how to start it again. The job is not affected.
 
 ### logs
 
