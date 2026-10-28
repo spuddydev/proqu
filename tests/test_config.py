@@ -50,6 +50,9 @@ def test_set_value(key, text, stored):
         ("aging_per_minute", "inf", "number"),
         ("cpus", "\u0662", "whole number"),
         ("cpus", "1_0", "whole number"),
+        ("cpus", "+2", "whole number"),
+        ("bid_budget", "1" * 13, "whole number"),
+        ("aging_per_minute", "\u0661", "number"),
         ("colour", "red", "unknown config key"),
     ],
 )
@@ -126,6 +129,12 @@ def test_relative_xdg_is_ignored(tmp_path, monkeypatch):
         {"bid_budget": -5},
         {"aging_per_minute": "fast"},
         {"kill_grace": 0.5},
+        {"aging_per_minute": True},
+        {"aging_per_minute": 10**400},
+        {"aging_per_minute": -1},
+        {"gpus": [True]},
+        {"vram": 0},
+        {"bid_budget": -1},
     ],
 )
 def test_bad_values_in_the_file_are_refused(tmp_path, bad):
@@ -219,3 +228,20 @@ def test_unusable_state_dir_gives_a_clear_error(tmp_path, monkeypatch):
     monkeypatch.setenv("PROQU_HOME", str(blocker / "state"))
     with pytest.raises(paths.StateDirError, match="cannot use state directory"):
         paths.state_dir()
+
+
+def test_bid_budget_of_zero_is_allowed(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text('{"bid_budget": 0}')
+    assert config.load(path) == {"bid_budget": 0}
+
+
+def test_bad_values_load_without_validation(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text('{"ram": -5}')
+    assert config.load(path, validate=False) == {"ram": -5}
+
+
+def test_save_leaves_no_temp_files(tmp_path):
+    config.save(tmp_path / "config.json", {"ram": 5})
+    assert [p.name for p in tmp_path.iterdir()] == ["config.json"]

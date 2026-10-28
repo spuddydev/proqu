@@ -1,9 +1,11 @@
 """User configuration. Resource limits may only lower what the machine has."""
 
+import contextlib
 import json
 import math
 import os
 import re
+import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -30,17 +32,20 @@ class Settings:
     kill_grace: int
 
 
-def load(path: Path) -> dict:
+def load(path: Path, validate: bool = True) -> dict:
+    """Read the config. Without validation a bad value can still be unset."""
     try:
         config = json.loads(path.read_text())
     except FileNotFoundError:
         return {}
     except ValueError:
         config = None
+    except OSError as error:
+        raise ValueError(f"cannot read config file {path}: {error.strerror}") from None
     if not isinstance(config, dict):
         raise ValueError(f"config file {path} is not valid JSON, fix or delete it")
     for key, value in config.items():
-        if key in DESCRIPTIONS and not _valid(key, value):
+        if validate and key in DESCRIPTIONS and not _valid(key, value):
             raise ValueError(
                 f"config file {path} has a bad value for {key}, run `proqu config unset {key}`"
             )
@@ -58,13 +63,25 @@ def _valid(key: str, value) -> bool:
         return isinstance(value, list) and all(
             isinstance(i, int) and not isinstance(i, bool) for i in value
         )
-    return isinstance(value, (int, float)) and math.isfinite(value) and value >= 0
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value) and value >= 0
+    except OverflowError:
+        return False
 
 
 def save(path: Path, config: dict) -> None:
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n")
-    os.replace(tmp, path)
+    """Replace the config file atomically."""
+    handle, tmp = tempfile.mkstemp(dir=path.parent, prefix="config.", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w") as out:
+            out.write(json.dumps(config, indent=2, sort_keys=True) + "\n")
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+        raise
 
 
 def settings(config: dict) -> Settings:
