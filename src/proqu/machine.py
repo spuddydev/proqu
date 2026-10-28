@@ -1,0 +1,239 @@
+"""Detection of the resources this machine offers to jobs."""
+
+import contextlib
+import json
+import math
+import os
+import shutil
+import subprocess
+import tempfile
+import time
+from dataclasses import asdict, dataclass
+from pathlib import Path
+
+from proqu import paths
+
+# how long a detected machine is trusted before it is detected again
+SNAPSHOT_AGE = 3600
+
+
+@dataclass(frozen=True)
+class GpuInfo:
+    index: int
+    uuid: str
+    vram: int
+
+
+@dataclass(frozen=True)
+class Machine:
+    ram: int
+    cpu_ids: tuple[int, ...]
+    gpus: tuple[GpuInfo, ...]
+
+
+def detect(previous: Machine | None = None) -> Machine:
+    """Detect the machine. A failed GPU query keeps the previous GPU list."""
+    gpus = detect_gpus()
+    if gpus is None:
+        gpus = previous.gpus if previous else ()
+    return Machine(ram=detect_ram(), cpu_ids=detect_cpus(), gpus=gpus)
+
+
+def snapshot(refresh: bool = False) -> Machine:
+    """The machine as the queue sees it, cached for an hour.
+
+    Inside a job the caller sits in the job's own cgroup and CPU pinning, which
+    would shrink what is detected. A job therefore never refreshes or replaces
+    the cached snapshot, and only detects for itself when there is none.
+    """
+    path = paths.machine_path()
+    cached = _load(path)
+    in_job = bool(os.environ.get("PROQU_JOB_ID"))
+    if cached and (in_job or (not refresh and _age(path) < SNAPSHOT_AGE)):
+        return cached
+    machine = detect(cached)
+    if not in_job:
+        _save(path, machine)
+    return machine
+
+
+def _age(path: Path) -> float:
+    try:
+        return time.time() - path.stat().st_mtime
+    except OSError:
+        return float("inf")
+
+
+def _save(path: Path, machine: Machine) -> None:
+    """Write the snapshot atomically. Failing to cache it is not an error."""
+    try:
+        handle, tmp = tempfile.mkstemp(dir=path.parent, prefix="machine.", suffix=".tmp")
+    except OSError:
+        return
+    try:
+        with os.fdopen(handle, "w") as out:
+            out.write(json.dumps(asdict(machine)))
+        os.replace(tmp, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
+
+
+def _load(path: Path) -> Machine | None:
+    """The cached snapshot, or None when it is missing or does not make sense."""
+    try:
+        data = json.loads(path.read_text())
+        machine = Machine(
+            ram=data["ram"],
+            cpu_ids=tuple(data["cpu_ids"]),
+            gpus=tuple(GpuInfo(**gpu) for gpu in data["gpus"]),
+        )
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    numbers = [machine.ram, *machine.cpu_ids]
+    for gpu in machine.gpus:
+        numbers += [gpu.index, gpu.vram]
+    sane = all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in numbers)
+    if not sane or machine.ram == 0 or not machine.cpu_ids:
+        return None
+    if not all(isinstance(gpu.uuid, str) for gpu in machine.gpus):
+        return None
+    return machine
+
+
+def detect_ram(proc: Path = Path("/proc"), cgroup_root: Path = Path("/sys/fs/cgroup")) -> int:
+    """Total RAM, lowered by any memory limit on the cgroup proqu runs in."""
+    total = 0
+    for line in (proc / "meminfo").read_text().splitlines():
+        if line.startswith("MemTotal:"):
+            total = int(line.split()[1]) * 1024
+            break
+    limit = _cgroup_memory_limit(proc, cgroup_root)
+    return min(total, limit) if limit else total
+
+
+def _cgroup_memory_limit(proc: Path, cgroup_root: Path) -> int | None:
+    """The tightest memory limit on this process's cgroup or its ancestors."""
+    limits = []
+    for version, path, _ in _cgroups(proc, "memory"):
+        if version == 2:
+            limits += [_read_limit(node / "memory.max") for node in _ancestors(cgroup_root, path)]
+        else:
+            v1_root = cgroup_root / "memory"
+            limits += [_read_limit(n / "memory.limit_in_bytes") for n in _ancestors(v1_root, path)]
+    found = [limit for limit in limits if limit]
+    return min(found) if found else None
+
+
+def _cgroup_cpu_limit(proc: Path, cgroup_root: Path) -> int | None:
+    """The tightest whole CPU count allowed by a cgroup CPU quota."""
+    counts = []
+    for version, path, controllers in _cgroups(proc, "cpu"):
+        if version == 2:
+            nodes, quota_file, period_file = _ancestors(cgroup_root, path), "cpu.max", None
+        else:
+            nodes = _ancestors(cgroup_root / controllers, path)
+            quota_file, period_file = "cpu.cfs_quota_us", "cpu.cfs_period_us"
+        for node in nodes:
+            try:
+                if period_file:
+                    quota = (node / quota_file).read_text().strip()
+                    period = (node / period_file).read_text().strip()
+                else:
+                    quota, period = (node / quota_file).read_text().split()
+            except (OSError, ValueError):
+                continue
+            # an unlimited quota reads "max" on v2 and "-1" on v1
+            if quota.isdigit() and period.isdigit() and int(period) > 0:
+                counts.append(max(1, math.ceil(int(quota) / int(period))))
+    return min(counts) if counts else None
+
+
+def _cgroups(proc: Path, controller: str) -> list[tuple[int, str, str]]:
+    """The cgroup paths of this process, as (version, path, controllers)."""
+    try:
+        lines = (proc / "self" / "cgroup").read_text().splitlines()
+    except OSError:
+        return []
+    found = []
+    for line in lines:
+        parts = line.split(":", 2)
+        if len(parts) != 3:
+            continue
+        _, controllers, path = parts
+        if controllers == "":
+            found.append((2, path, controllers))
+        elif controller in controllers.split(","):
+            found.append((1, path, controllers))
+    return found
+
+
+def _ancestors(root: Path, path: str) -> list[Path]:
+    """The cgroup directory for path and every parent up to the mount root.
+
+    In a private cgroup namespace the path may be missing under the mount, or
+    climb above it with "..", so only the mount root itself is read.
+    """
+    node = root / path.lstrip("/")
+    if ".." in Path(path).parts or not node.is_dir():
+        return [root]
+    nodes = [node]
+    while node != root and root in node.parents:
+        node = node.parent
+        nodes.append(node)
+    return nodes
+
+
+def _read_limit(path: Path) -> int | None:
+    try:
+        text = path.read_text().strip()
+    except OSError:
+        return None
+    if not text.isdigit():
+        return None
+    value = int(text)
+    # cgroup v1 reports "no limit" as a huge page aligned number
+    return value if value < 2**60 else None
+
+
+def detect_cpus(
+    proc: Path = Path("/proc"), cgroup_root: Path = Path("/sys/fs/cgroup")
+) -> tuple[int, ...]:
+    """CPU ids this process may run on, trimmed to any cgroup CPU quota."""
+    cpu_ids = tuple(sorted(os.sched_getaffinity(0)))
+    quota = _cgroup_cpu_limit(proc, cgroup_root)
+    return cpu_ids[:quota] if quota else cpu_ids
+
+
+def detect_gpus() -> tuple[GpuInfo, ...] | None:
+    """NVIDIA GPUs from nvidia-smi: empty when it is missing, None when it fails."""
+    if not shutil.which("nvidia-smi"):
+        return ()
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,uuid,memory.total,mig.mode.current",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_gpus(result.stdout)
+
+
+def parse_gpus(text: str) -> tuple[GpuInfo, ...]:
+    """Parse nvidia-smi rows, skipping unreadable ones and GPUs in MIG mode."""
+    gpus = []
+    for line in text.splitlines():
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) != 4 or not fields[0].isdigit() or not fields[2].isdigit():
+            continue
+        if fields[3].lower() == "enabled":
+            continue
+        gpus.append(GpuInfo(index=int(fields[0]), uuid=fields[1], vram=int(fields[2]) * 1024**2))
+    return tuple(gpus)
