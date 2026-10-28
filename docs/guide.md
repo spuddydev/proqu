@@ -247,7 +247,7 @@ It needs all of these:
 
 Watch mode is the fallback. A supervisor adds up the memory of every process in the job once a second and kills the job when the total is over `--ram`. Shared pages are counted once. CPU is limited only by pinning to the assigned cores.
 
-proqu probes for cgroup support and remembers the answer for a day. If a scope fails to start, proqu falls back to watch mode for that job and for the next day. If the memory cap was not applied, RAM is watched as well.
+proqu probes for cgroup support and remembers the answer for a day. If a scope fails to start, proqu runs that job in watch mode and forgets the answer, so the next job probes again. If the memory cap was not applied, RAM is watched as well.
 
 ### GPU rules
 
