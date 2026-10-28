@@ -3,3 +3,7 @@ tests export-ignore
 .claude export-ignore
 .pre-commit-config.yaml export-ignore
 uv.lock export-ignore
+CLAUDE.md export-ignore
+.gitignore export-ignore
+.gitattributes export-ignore
+.python-version export-ignore
