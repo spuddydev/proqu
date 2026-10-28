@@ -183,11 +183,39 @@ def test_state_dir_owned_by_someone_else_is_refused(tmp_path, monkeypatch):
         paths.state_dir()
 
 
-def test_files_in_state_dir_are_private(tmp_path, monkeypatch):
+def test_state_dir_leaves_the_umask_alone(tmp_path, monkeypatch):
     monkeypatch.setenv("PROQU_HOME", str(tmp_path / "state"))
     import os
 
-    os.umask(0o022)
-    path = paths.config_path()
-    config.save(path, {"ram": 5})
-    assert path.stat().st_mode & 0o077 == 0
+    before = os.umask(0o022)
+    try:
+        paths.state_dir()
+        assert os.umask(0o022) == 0o022
+    finally:
+        os.umask(before)
+
+
+def test_relative_proqu_home_is_made_absolute(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PROQU_HOME", "rel")
+    assert paths.state_dir() == tmp_path / "rel"
+
+
+def test_no_home_directory_gives_a_clear_error(monkeypatch):
+    monkeypatch.delenv("PROQU_HOME", raising=False)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+
+    def no_home():
+        raise RuntimeError("no home")
+
+    monkeypatch.setattr(paths.Path, "home", no_home)
+    with pytest.raises(paths.StateDirError, match="set PROQU_HOME"):
+        paths.state_dir()
+
+
+def test_unusable_state_dir_gives_a_clear_error(tmp_path, monkeypatch):
+    blocker = tmp_path / "file"
+    blocker.write_text("")
+    monkeypatch.setenv("PROQU_HOME", str(blocker / "state"))
+    with pytest.raises(paths.StateDirError, match="cannot use state directory"):
+        paths.state_dir()
