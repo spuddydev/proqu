@@ -12,7 +12,12 @@ from pathlib import Path
 from proqu.machine import Machine
 from proqu.units import format_duration, format_size, parse_duration, parse_size
 
-DEFAULTS = {"bid_budget": 11000, "aging_per_minute": 10.0, "kill_grace": 10}
+DEFAULTS = {
+    "bid_budget": 11000,
+    "aging_per_minute": 10.0,
+    "kill_grace": 10,
+    "length_delay_cap": 4 * 3600,
+}
 
 # What an unset reserve means, as shown by `proqu config show`.
 RESERVE_DEFAULTS = {
@@ -29,6 +34,7 @@ DESCRIPTIONS = {
     "vram": "GPU memory jobs may use on each GPU, for example 20G",
     "bid_budget": "bid points each session may spend",
     "aging_per_minute": "priority points every queued job gains per minute",
+    "length_delay_cap": "most a long job is delayed in the queue order, 0 for no delay",
     "kill_grace": "time between the polite and the forced kill, for example 10s",
 }
 
@@ -38,6 +44,7 @@ class Settings:
     bid_budget: int
     aging_per_minute: float
     kill_grace: int
+    length_delay_cap: float
 
 
 def load(path: Path, validate: bool = True) -> dict:
@@ -171,6 +178,8 @@ def _parse(key: str, text: str, machine: Machine):
         if value < 0:
             raise ValueError("aging_per_minute cannot be negative")
         return value
+    if text.strip() == "0":
+        return 0
     return parse_duration(text)
 
 
@@ -211,7 +220,7 @@ def describe(key: str, value) -> str:
     """A config value as a person would write it."""
     if key in ("ram", "vram", "reserve_ram"):
         return format_size(value)
-    if key == "kill_grace":
+    if key in ("kill_grace", "length_delay_cap"):
         return format_duration(value)
     if key == "gpus":
         return ",".join(map(str, value)) or "none"

@@ -15,7 +15,7 @@ MACHINE = Machine(
 
 def test_defaults():
     assert config.settings({}) == config.Settings(
-        bid_budget=11000, aging_per_minute=10.0, kill_grace=10
+        bid_budget=11000, aging_per_minute=10.0, kill_grace=10, length_delay_cap=4 * 3600
     )
 
 
@@ -158,8 +158,9 @@ def test_unknown_keys_are_ignored(tmp_path):
 
 
 def test_settings_read_the_config():
-    assert config.settings({"bid_budget": 5, "aging_per_minute": 1.5, "kill_grace": 3}) == (
-        config.Settings(bid_budget=5, aging_per_minute=1.5, kill_grace=3)
+    given = {"bid_budget": 5, "aging_per_minute": 1.5, "kill_grace": 3, "length_delay_cap": 60}
+    assert config.settings(given) == (
+        config.Settings(bid_budget=5, aging_per_minute=1.5, kill_grace=3, length_delay_cap=60)
     )
 
 
@@ -327,3 +328,27 @@ def test_zero_reserve_in_the_file_is_valid(tmp_path):
     path.write_text('{"reserve_cpus": -1}')
     with pytest.raises(ValueError, match="reserve_cpus"):
         config.load(path)
+
+
+# The length delay cap
+
+
+@pytest.mark.parametrize(("text", "stored"), [("2h", 7200), ("90m", 5400), ("0", 0)])
+def test_set_length_delay_cap(text, stored):
+    assert config.set_value({}, "length_delay_cap", text, MACHINE) == {"length_delay_cap": stored}
+
+
+def test_set_length_delay_cap_refuses_nonsense():
+    with pytest.raises(ValueError, match="cannot read duration"):
+        config.set_value({}, "length_delay_cap", "long", MACHINE)
+
+
+def test_length_delay_cap_zero_is_valid_in_the_file(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text('{"length_delay_cap": 0}')
+    assert config.load(path) == {"length_delay_cap": 0}
+    assert config.settings({"length_delay_cap": 0}).length_delay_cap == 0
+
+
+def test_describe_length_delay_cap():
+    assert config.describe("length_delay_cap", 4 * 3600) == "4h"

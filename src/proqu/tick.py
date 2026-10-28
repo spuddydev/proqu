@@ -29,7 +29,7 @@ def tick(store: Store | None = None, cached_only: bool = False) -> None:
     if seen is None:
         return
     limits = to_limits(config.effective_limits(seen, current))
-    aging = config.settings(current).aging_per_minute
+    settings = config.settings(current)
     # a supervisor started from inside a job would share that job's cgroup when
     # cgroups enforce limits, and die with it, so passes inside jobs leave
     # starting to the next pass outside one
@@ -44,7 +44,8 @@ def tick(store: Store | None = None, cached_only: bool = False) -> None:
             [to_queued(job) for job in active if job.state == "queued"],
             dependency_states(store, active),
             now,
-            aging,
+            settings.aging_per_minute,
+            settings.length_delay_cap,
         )
         for fail in plan.fail:
             end_queued(store, fail.id, fail.reason, now)

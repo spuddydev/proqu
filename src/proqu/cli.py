@@ -53,8 +53,10 @@ def queue_outlook(store: Store, now: float) -> dict[str, report.Place]:
     """Positions and projections of queued jobs, from the limits a pass would use."""
     current = load_config()
     limits = ticking.to_limits(config.effective_limits(machine.snapshot(), current))
-    aging = config.settings(current).aging_per_minute
-    return report.outlook(store, current_session(), limits, aging, now)
+    settings = config.settings(current)
+    return report.outlook(
+        store, current_session(), limits, settings.aging_per_minute, settings.length_delay_cap, now
+    )
 
 
 def sentence(text: str) -> str:
@@ -599,6 +601,11 @@ def cmd_limits(args, command: list[str]) -> int:
     )
     print(f"Each session may bid up to {settings.bid_budget} points in total.")
     print(f"Every queued job gains {settings.aging_per_minute:g} priority points per minute.")
+    if settings.length_delay_cap:
+        print(
+            "A long job counts as submitted later by a tenth of its --max, at most "
+            f"{format_duration(settings.length_delay_cap)}, so shorter jobs tend to go first."
+        )
     return 0
 
 

@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from proqu import cli, machine, paths, procs, tick
+from proqu import cli, machine, paths, procs, scheduler, tick
 from proqu.cli import main
 from proqu.store import Store
 
@@ -352,3 +352,17 @@ def test_a_cached_only_pass_never_detects_the_machine(queue, monkeypatch):
     monkeypatch.setattr(machine, "cached", lambda: machine.Machine(4 * G, CPUS, ()))
     tick.tick(cached_only=True)
     assert settle([job.id])[0].state == "succeeded"
+
+
+def test_a_pass_hands_the_length_delay_cap_to_the_scheduler(queue, monkeypatch):
+    seen = []
+
+    def spy(*args):
+        seen.append(args[5:])
+        return scheduler.Plan([], [])
+
+    monkeypatch.setattr(scheduler, "plan", spy)
+    tick.tick()
+    main(["config", "set", "length_delay_cap", "2h"])
+    tick.tick()
+    assert seen == [(10.0, 4 * 3600), (10.0, 2 * 3600)]
