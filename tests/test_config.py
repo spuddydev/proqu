@@ -15,7 +15,12 @@ MACHINE = Machine(
 
 def test_defaults():
     assert config.settings({}) == config.Settings(
-        bid_budget=11000, aging_per_minute=10.0, kill_grace=10, length_delay_cap=4 * 3600
+        bid_budget=11000,
+        aging_per_minute=10.0,
+        kill_grace=10,
+        length_delay_cap=4 * 3600,
+        long_job_after=12 * 3600,
+        long_job_share=75,
     )
 
 
@@ -158,10 +163,15 @@ def test_unknown_keys_are_ignored(tmp_path):
 
 
 def test_settings_read_the_config():
-    given = {"bid_budget": 5, "aging_per_minute": 1.5, "kill_grace": 3, "length_delay_cap": 60}
-    assert config.settings(given) == (
-        config.Settings(bid_budget=5, aging_per_minute=1.5, kill_grace=3, length_delay_cap=60)
-    )
+    given = {
+        "bid_budget": 5,
+        "aging_per_minute": 1.5,
+        "kill_grace": 3,
+        "length_delay_cap": 60,
+        "long_job_after": 7200,
+        "long_job_share": 50,
+    }
+    assert config.settings(given) == config.Settings(**given)
 
 
 def test_effective_limits_with_no_gpus_allowed():
@@ -368,3 +378,33 @@ def test_length_delay_cap_zero_is_valid_in_the_file(tmp_path):
 
 def test_describe_length_delay_cap():
     assert config.describe("length_delay_cap", 4 * 3600) == "4h"
+
+
+@pytest.mark.parametrize(("text", "stored"), [("50", 50), ("50%", 50), ("100", 100), (" 1 ", 1)])
+def test_set_long_job_share(text, stored):
+    assert config.set_value({}, "long_job_share", text, MACHINE) == {"long_job_share": stored}
+
+
+@pytest.mark.parametrize("text", ["0", "101", "half", "0.5", "-5"])
+def test_set_long_job_share_refuses_what_is_not_a_percent(text):
+    with pytest.raises(ValueError):
+        config.set_value({}, "long_job_share", text, MACHINE)
+
+
+@pytest.mark.parametrize("value", [0, 101, 0.5, True, "75"])
+def test_long_job_share_out_of_range_in_the_file_is_refused(tmp_path, value):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"long_job_share": value}))
+    with pytest.raises(ValueError, match="long_job_share"):
+        config.load(path)
+
+
+def test_set_long_job_after():
+    assert config.set_value({}, "long_job_after", "6h", MACHINE) == {"long_job_after": 6 * 3600}
+    with pytest.raises(ValueError):
+        config.set_value({}, "long_job_after", "0", MACHINE)
+
+
+def test_long_job_settings_read_as_a_person_would_write_them():
+    assert config.describe("long_job_after", 12 * 3600) == "12h"
+    assert config.describe("long_job_share", 75) == "75%"
