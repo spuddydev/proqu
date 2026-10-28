@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from proqu.cli import VERSION
+
 ROOT = Path(__file__).resolve().parent.parent
 LAUNCHER = ROOT / "bin" / "proqu"
 
@@ -58,6 +60,7 @@ def test_plugin_version_matches_the_package():
     manifest = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
     pyproject = (ROOT / "pyproject.toml").read_text()
     assert f'version = "{manifest["version"]}"' in re.findall(r'^version = ".*"$', pyproject, re.M)
+    assert manifest["version"] == VERSION
 
 
 def test_launcher_refuses_an_old_python():

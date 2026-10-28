@@ -16,6 +16,7 @@ from proqu import tick as ticking
 from proqu.store import ACTIVE, TERMINAL, Job, LockTimeout, Store, StoreError
 from proqu.units import format_duration, format_size, parse_duration, parse_size
 
+VERSION = "1.0.0"
 MAX_BID = 10000
 
 
@@ -676,6 +677,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="proqu",
         description="A shared compute queue for coding agents.",
     )
+    parser.add_argument("--version", action="version", version=f"proqu {VERSION}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     submit = commands.add_parser(
