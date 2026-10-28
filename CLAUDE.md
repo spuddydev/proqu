@@ -49,6 +49,7 @@ A shared compute queue that lets coding agents submit heavy jobs and share a mac
 
 - `src/proqu/` the CLI and scheduler.
 - `tests/` pytest suite.
+- `docs/` the user guide and design notes.
 - `.claude-plugin/` plugin and marketplace manifests.
 - `bin/proqu` launcher that runs the CLI from the plugin's files.
 - `hooks/hooks.json` hook wiring for the plugin.
