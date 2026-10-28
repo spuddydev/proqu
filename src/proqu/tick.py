@@ -12,6 +12,7 @@ import time
 
 from proqu import config, machine, paths, procs, runner, scheduler
 from proqu.store import Job, Store
+from proqu.units import format_size
 
 LOST = "its supervisor was lost (machine restart or crash), resubmit it"
 
@@ -29,6 +30,7 @@ def tick(store: Store | None = None, cached_only: bool = False) -> None:
     if seen is None:
         return
     limits = to_limits(config.effective_limits(seen, current))
+    unreserved = to_limits(config.effective_limits(seen, current, reserved=False))
     settings = config.settings(current)
     # a supervisor started from inside a job would share that job's cgroup when
     # cgroups enforce limits, and die with it, so passes inside jobs leave
@@ -48,10 +50,29 @@ def tick(store: Store | None = None, cached_only: bool = False) -> None:
             settings.length_delay_cap,
         )
         for fail in plan.fail:
-            end_queued(store, fail.id, fail.reason, now)
+            job = next(j for j in active if j.id == fail.id)
+            reason = reserve_reason(request(job), fail.reason, limits, unreserved)
+            end_queued(store, fail.id, reason, now)
         if may_start:
             for start in plan.start:
                 begin(store, start)
+
+
+def reserve_reason(
+    req: scheduler.Request, reason: str, limits: scheduler.Limits, unreserved: scheduler.Limits
+) -> str:
+    """Name the reserve when it alone makes a queued job too big, else keep the reason."""
+    if scheduler.over_limits(req, limits) != reason or scheduler.over_limits(req, unreserved):
+        return reason
+    if req.ram > limits.ram:
+        need, have, key = f"{format_size(req.ram)} RAM", format_size(limits.ram), "reserve_ram"
+    else:
+        need, have, key = f"{req.cpus} CPUs", str(len(limits.cpu_ids)), "reserve_cpus"
+    return (
+        f"needs {need} but the queue now keeps part of the machine in reserve for services "
+        f"and interactive work, leaving {have}. Only the machine's owner should change that, "
+        f"with `proqu config set {key}`"
+    )
 
 
 def to_limits(limits: machine.Machine) -> scheduler.Limits:

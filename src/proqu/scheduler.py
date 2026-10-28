@@ -150,7 +150,7 @@ class _Pool:
         return cpu_ids, gpu_ids
 
 
-def _over_limits(req: Request, limits: Limits) -> str | None:
+def over_limits(req: Request, limits: Limits) -> str | None:
     # only reachable when the limits were lowered after the job was submitted
     lowered = "the queue limits were lowered after it was submitted"
     if req.ram > limits.ram:
@@ -181,7 +181,7 @@ def _doomed(
                 reasons[q.id] = f"job {dep}, which it waits for, {ended}"
                 break
         else:
-            reason = _over_limits(q.req, limits)
+            reason = over_limits(q.req, limits)
             if reason:
                 reasons[q.id] = reason
     # A job waiting on a job that fails in this pass fails too.

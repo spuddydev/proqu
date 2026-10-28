@@ -366,3 +366,26 @@ def test_a_pass_hands_the_length_delay_cap_to_the_scheduler(queue, monkeypatch):
     main(["config", "set", "length_delay_cap", "2h"])
     tick.tick()
     assert seen == [(10.0, 4 * 3600), (10.0, 2 * 3600)]
+
+
+def test_a_queued_job_failed_by_the_reserve_names_it(queue, monkeypatch):
+    real = tick.tick
+    monkeypatch.setattr(tick, "tick", lambda store=None: None)
+    job = submit("--ram", "4G")
+    monkeypatch.setattr(tick, "tick", real)
+    main(["config", "set", "reserve_ram", "1G"])
+    real()
+    failed = Store().get(job.id)
+    assert failed.state == "failed"
+    assert "reserve" in failed.reason
+    assert "reserve_ram" in failed.reason
+
+
+def test_a_queued_job_failed_by_a_config_limit_keeps_the_old_wording(queue, monkeypatch):
+    real = tick.tick
+    monkeypatch.setattr(tick, "tick", lambda store=None: None)
+    job = submit("--ram", "4G")
+    monkeypatch.setattr(tick, "tick", real)
+    main(["config", "set", "ram", "2G"])
+    real()
+    assert "lowered after it was submitted" in Store().get(job.id).reason
