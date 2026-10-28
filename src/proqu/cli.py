@@ -16,7 +16,7 @@ from proqu import tick as ticking
 from proqu.store import ACTIVE, TERMINAL, Job, LockTimeout, Store, StoreError
 from proqu.units import format_duration, format_size, parse_duration, parse_size
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 MAX_BID = 10000
 
 
