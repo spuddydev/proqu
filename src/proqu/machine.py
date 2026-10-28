@@ -4,14 +4,17 @@ import contextlib
 import json
 import math
 import os
+import platform
+import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from proqu import paths
+from proqu import amd, darwin, paths
 
 # how long a detected machine is trusted before it is detected again
 SNAPSHOT_AGE = 3600
@@ -19,11 +22,21 @@ SNAPSHOT_AGE = 3600
 FREE_VRAM_WAIT = 5
 
 
+VENDORS = ("nvidia", "amd", "apple")
+
+
 @dataclass(frozen=True)
 class GpuInfo:
+    """One GPU. Every GPU of a machine has the same vendor, the first one found.
+
+    vram 0 means the GPU has no memory of its own and uses the RAM, as on Apple silicon.
+    """
+
     index: int
     uuid: str
     vram: int
+    # a snapshot cached before vendors were known only ever held NVIDIA GPUs
+    vendor: str = "nvidia"
 
 
 @dataclass(frozen=True)
@@ -35,10 +48,30 @@ class Machine:
 
 def detect(previous: Machine | None = None) -> Machine:
     """Detect the machine. A failed GPU query keeps the previous GPU list."""
+    if _macos():
+        cpu_ids = tuple(range(darwin.cpu_count()))
+        return Machine(ram=darwin.total_ram(), cpu_ids=cpu_ids, gpus=apple_gpus())
     gpus = detect_gpus()
     if gpus is None:
         gpus = previous.gpus if previous else ()
     return Machine(ram=detect_ram(), cpu_ids=detect_cpus(), gpus=gpus)
+
+
+def _macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def available_cpus() -> set[int]:
+    """The CPU ids this process may run on now. macOS cannot pin, so that is every CPU."""
+    if hasattr(os, "sched_getaffinity"):
+        return os.sched_getaffinity(0)
+    return set(range(darwin.cpu_count()))
+
+
+def gpu_vendor(seen: Machine | None = None) -> str | None:
+    """The vendor of a machine's GPUs, by default the cached snapshot's, or None without any."""
+    seen = seen or cached()
+    return seen.gpus[0].vendor if seen and seen.gpus else None
 
 
 def snapshot(refresh: bool = False) -> Machine:
@@ -103,7 +136,7 @@ def _load(path: Path) -> Machine | None:
     sane = all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in numbers)
     if not sane or machine.ram == 0 or not machine.cpu_ids:
         return None
-    if not all(isinstance(gpu.uuid, str) for gpu in machine.gpus):
+    if not all(isinstance(gpu.uuid, str) and gpu.vendor in VENDORS for gpu in machine.gpus):
         return None
     return machine
 
@@ -119,11 +152,16 @@ def detect_ram(proc: Path = Path("/proc"), cgroup_root: Path = Path("/sys/fs/cgr
     return min(total, limit) if limit else total
 
 
-def free_ram(proc: Path = Path("/proc")) -> int | None:
+def free_ram(proc: Path | None = None) -> int | None:
     """Memory the kernel could give new work now, MemAvailable, or None if it cannot be read.
 
-    Read fresh on every call, never cached, as it changes from moment to moment.
+    Read fresh on every call, never cached, as it changes from moment to moment. On
+    macOS, which has no MemAvailable, it is an estimate from the free and reusable pages.
     """
+    if proc is None:
+        if _macos():
+            return darwin.free_ram()
+        proc = Path("/proc")
     try:
         for line in (proc / "meminfo").read_text().splitlines():
             if line.startswith("MemAvailable:"):
@@ -227,6 +265,25 @@ def detect_cpus(
 
 
 def detect_gpus() -> tuple[GpuInfo, ...] | None:
+    """The GPUs of one vendor, NVIDIA first, then AMD. None when a query failed.
+
+    A machine with GPUs of both is offered only its NVIDIA ones.
+    """
+    nvidia = detect_nvidia()
+    if nvidia != ():
+        return nvidia
+    return detect_amd()
+
+
+def detect_amd(sys_root: Path = Path("/sys")) -> tuple[GpuInfo, ...] | None:
+    """AMD GPUs from sysfs: empty when there are none, None when they cannot be read."""
+    found = amd.detect(sys_root)
+    if found is None:
+        return None
+    return tuple(GpuInfo(gpu.index, amd.key(gpu), gpu.vram, "amd") for gpu in found)
+
+
+def detect_nvidia() -> tuple[GpuInfo, ...] | None:
     """NVIDIA GPUs from nvidia-smi: empty when it is missing, None when it fails."""
     if not shutil.which("nvidia-smi"):
         return ()
@@ -260,8 +317,35 @@ def parse_gpus(text: str) -> tuple[GpuInfo, ...]:
     return tuple(gpus)
 
 
+def apple_gpus() -> tuple[GpuInfo, ...]:
+    """The GPU of Apple silicon as one slot, or none on any other Mac.
+
+    Its memory is the RAM, so vram is 0 and a job counts GPU memory in its RAM.
+    Intel Macs are offered no GPU, as nothing there could keep a job to its GPU.
+    """
+    if platform.machine() != "arm64":
+        return ()
+    try:
+        result = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        name = result.stdout
+    except (OSError, subprocess.SubprocessError):
+        name = ""
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    if not slug.startswith("apple"):
+        slug = f"apple-{slug}" if slug else "apple-gpu"
+    return (GpuInfo(index=0, uuid=slug, vram=0, vendor="apple"),)
+
+
 def free_vram() -> dict[int, int] | None:
-    """Free memory on each NVIDIA GPU by index, or None when it cannot be read."""
+    """Free memory on each GPU by index, or None when it cannot be read."""
+    if gpu_vendor() == "amd":
+        return amd.free_vram()
     if not shutil.which("nvidia-smi"):
         return None
     try:

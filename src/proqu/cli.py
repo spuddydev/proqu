@@ -16,7 +16,7 @@ from proqu import tick as ticking
 from proqu.store import ACTIVE, TERMINAL, Job, LockTimeout, Store, StoreError
 from proqu.units import format_duration, format_size, parse_duration, parse_size
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 MAX_BID = 10000
 
 
@@ -78,7 +78,9 @@ def sentence(text: str) -> str:
 
 def describe_request(ram: int, cpus: int, gpus: int, vram: int) -> str:
     parts = [f"{format_size(ram)} RAM", f"{cpus} CPU{'s' if cpus != 1 else ''}"]
-    if gpus:
+    if gpus and not vram:
+        parts.append(f"{gpus} GPU{'s' if gpus != 1 else ''} using the RAM")
+    elif gpus:
         parts.append(f"{gpus} GPU{'s' if gpus != 1 else ''} with {format_size(vram)} each")
     return ", ".join(parts)
 
@@ -249,6 +251,9 @@ def check_request(
         raise invalid(message)
     if gpus < 0:
         raise invalid("--gpus cannot be negative")
+    if any(gpu.vram == 0 for gpu in detected.gpus):
+        check_unified(limits, gpus, vram)
+        return
     if gpus and not vram:
         raise invalid("--gpus needs --vram, the GPU memory the job needs on each GPU")
     if vram and not gpus:
@@ -265,6 +270,21 @@ def check_request(
         raise invalid(
             f"--gpus {gpus} --vram {format_size(vram)} does not fit: only {len(big_enough)} "
             f"of the queue's GPUs allow that much (they allow {sizes})"
+        )
+
+
+def check_unified(limits: machine.Machine, gpus: int, vram: int) -> None:
+    """Refuse a request for a GPU that uses the RAM, as on Apple silicon, that cannot be met."""
+    if vram:
+        raise invalid(
+            "--vram does not apply on this machine: its GPU uses the RAM, so count the GPU "
+            "memory the job needs in --ram and leave --vram out"
+        )
+    if gpus and not limits.gpus:
+        raise invalid("this machine offers no GPUs to the queue, run without --gpus")
+    if gpus > len(limits.gpus):
+        raise invalid(
+            f"--gpus {gpus} is more than the {len(limits.gpus)} GPU the queue allows, use --gpus 1"
         )
 
 
@@ -622,10 +642,25 @@ def cmd_limits(args, command: list[str]) -> int:
     )
     if limits.gpus:
         for gpu in limits.gpus:
-            print(f"  GPU {gpu.index}: {format_size(gpu.vram)} memory")
+            if gpu.vram:
+                print(f"  GPU {gpu.index}: {format_size(gpu.vram)} memory")
+            else:
+                print(
+                    f"  GPU {gpu.index}: {gpu.uuid}, which uses the RAM, so one job at a time "
+                    "and its GPU memory counts in --ram"
+                )
     else:
         print("  GPUs: none")
-    if limits_module.cgroups_available():
+    if sys.platform == "darwin":
+        print(
+            "RAM is enforced by watching each job four times a second, counting the memory "
+            "footprint of all its processes, GPU memory included. macOS cannot pin a job to "
+            "CPUs, so its --cpus is counted for scheduling but a job may use more: run it with "
+            "that many threads. The Mac is kept awake while a job runs, as sleep would pause "
+            "the job but not its max runtime clock. A job without --gpus is trusted not to use "
+            "the GPU."
+        )
+    elif limits_module.cgroups_available():
         print(
             "RAM and CPU are enforced by the kernel: each job runs in its own cgroup. "
             "GPU use is watched every few seconds."
@@ -654,6 +689,11 @@ def cmd_limits(args, command: list[str]) -> int:
             f"Jobs with a --max over {format_duration(settings.long_job_after)} are long. Long "
             f"jobs together may hold at most {settings.long_job_share}% of RAM, cores and each "
             "GPU's memory. A larger long job runs only when no other long job is running."
+        )
+    if settings.hold_limit:
+        print(
+            "A job waiting for memory other programs are using may be passed by later jobs for "
+            f"{format_duration(settings.hold_limit)}. After that no later job starts until it has."
         )
     return 0
 

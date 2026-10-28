@@ -7,6 +7,9 @@ These limits stop mistakes, not deliberate evasion. A job can escape them, for
 example by running setsid with an empty environment so the process list no
 longer finds it, by calling systemd-run itself to leave its scope, or in watch
 mode by filling tmpfs shared memory that is not counted as its own.
+
+macOS has no cgroups, so there a job is always watched. Its RAM is the memory
+footprint of its processes, which also holds what they put on the GPU.
 """
 
 import contextlib
@@ -16,11 +19,12 @@ import resource
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
-from proqu import paths, procs
+from proqu import amd, darwin, machine, paths, procs
 from proqu.store import Job
 from proqu.units import format_size
 
@@ -28,15 +32,19 @@ from proqu.units import format_size
 PROBE_AGE = 86400
 # how long systemd-run may take to put a job in its scope
 SCOPE_WAIT = 5.0
-# how often GPU use is checked, nvidia-smi is too slow to run every poll
+# how often GPU use is checked, the GPU tools are too slow to run every poll
 GPU_EVERY = 5.0
-# the longest wait between GPU checks while nvidia-smi keeps failing
+# the longest wait between GPU checks while the GPU query keeps failing
 GPU_BACKOFF_MAX = 60.0
 
 # variables systemd-run needs to reach the user's manager
 SCOPE_VARS = ("XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS")
 
 OWN_LIMIT = "this was the job's own limit"
+
+# how each vendor's jobs are told which GPUs are theirs, and how to measure their use
+VISIBLE = {"nvidia": "CUDA_VISIBLE_DEVICES", "amd": "ROCR_VISIBLE_DEVICES"}
+MEASURE = {"nvidia": "nvidia-smi", "amd": "amd-smi or rocm-smi"}
 
 
 def ram_reason(limit: int, peak: int) -> str:
@@ -56,7 +64,14 @@ class Monitor:
         self.session = session
         self.gpu_uuids = gpu_uuids
         self.peak = 0
-        self.watch_gpus = shutil.which("nvidia-smi") is not None
+        self.vendor = machine.gpu_vendor()
+        # a GPU that uses the RAM shows its memory in the RAM, and cannot be told apart per job
+        if self.vendor == "amd":
+            self.watch_gpus = True
+        elif self.vendor == "apple":
+            self.watch_gpus = False
+        else:
+            self.watch_gpus = shutil.which("nvidia-smi") is not None
         self.next_gpu_check = time.monotonic()
         self.gpu_query_failed = False
         self.gpu_wait = GPU_EVERY
@@ -75,7 +90,7 @@ class Monitor:
         if not self.watch_gpus or time.monotonic() < self.next_gpu_check:
             return None
         apps = gpu_apps()
-        # a failing nvidia-smi is asked less and less often
+        # a failing GPU query is asked less and less often
         self.gpu_wait = GPU_EVERY if apps is not None else min(self.gpu_wait * 2, GPU_BACKOFF_MAX)
         self.next_gpu_check = time.monotonic() + self.gpu_wait
         if apps is None:
@@ -84,7 +99,8 @@ class Monitor:
             self.gpu_query_failed = True
             return None
         members = set(procs.job_members(self.job.id, self.session))
-        return gpu_breach(self.job, self.gpu_uuids, [app for app in apps if app[0] in members])
+        mine = [app for app in apps if app[0] in members]
+        return gpu_breach(self.job, self.gpu_uuids, mine, self.vendor or "nvidia")
 
     def kill_all(self) -> None:
         """Stop anything of the job the process list missed. Only a cgroup can do this."""
@@ -92,13 +108,18 @@ class Monitor:
     def finish(self, code: int | None = None) -> tuple[str, str] | None:
         """Evidence found only once the job has ended, given its exit code."""
         # a short job can start and end between two samples, the kernel remembers its peak
-        largest = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024
+        # in KiB on Linux and in bytes on macOS
+        scale = 1 if sys.platform == "darwin" else 1024
+        largest = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * scale
         self.peak = max(self.peak, largest)
         return None
 
 
 def gpu_breach(
-    job: Job, assigned: tuple[str, ...], apps: list[tuple[int, str, int | None]]
+    job: Job,
+    assigned: tuple[str, ...],
+    apps: list[tuple[int, str, int | None]],
+    vendor: str = "nvidia",
 ) -> tuple[str, str] | None:
     """Why the job's GPU use breaks its request, given its processes on GPUs."""
     if not apps:
@@ -113,20 +134,27 @@ def gpu_breach(
         if uuid not in assigned:
             return "killed", (
                 f"used GPU {uuid}, which was not given to it: {OWN_LIMIT}, "
-                "use the GPUs in CUDA_VISIBLE_DEVICES only"
+                f"use the GPUs in {VISIBLE.get(vendor, VISIBLE['nvidia'])} only"
             )
         used[uuid] = used.get(uuid, 0) + (memory or 0)
     worst = max(used.values())
     if worst > job.vram:
         return "killed", (
             f"used {format_size(worst)} of GPU memory, more than its --vram of "
-            f"{format_size(job.vram)}: {OWN_LIMIT}, measure it with nvidia-smi and resubmit"
+            f"{format_size(job.vram)}: {OWN_LIMIT}, measure it with "
+            f"{MEASURE.get(vendor, MEASURE['nvidia'])} and resubmit"
         )
     return None
 
 
 def gpu_apps() -> list[tuple[int, str, int | None]] | None:
     """Processes using GPUs as (pid, GPU uuid, bytes), or None if the query failed."""
+    vendor = machine.gpu_vendor()
+    if vendor == "amd":
+        return amd.apps()
+    if vendor == "apple":
+        # no process can be seen using it, its memory is counted in the RAM
+        return []
     try:
         result = subprocess.run(
             [
@@ -152,7 +180,13 @@ def gpu_apps() -> list[tuple[int, str, int | None]] | None:
 
 
 def memory_of(pid: int) -> int:
-    """Proportional memory of a process, so shared pages are not counted twice."""
+    """Proportional memory of a process, so shared pages are not counted twice.
+
+    macOS has no proportional count, so there it is the memory footprint, in which
+    pages shared between a job's processes are counted for each of them.
+    """
+    if sys.platform == "darwin":
+        return darwin.footprint(pid)
     try:
         with open(f"/proc/{pid}/smaps_rollup") as handle:
             for line in handle:
@@ -251,8 +285,10 @@ def cgroups_available() -> bool:
     """Whether jobs can be put in their own kernel enforced cgroup.
 
     Needs systemd-run for the user, a delegated memory controller, and linger,
-    because without linger the user's scopes die at the last logout.
+    because without linger the user's scopes die at the last logout. macOS has none.
     """
+    if sys.platform == "darwin":
+        return False
     key = f"{os.getuid()}:{procs.boot_id()}:{os.environ.get('XDG_RUNTIME_DIR', '')}"
     path = paths.state_dir() / "cgroups.json"
     try:

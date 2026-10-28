@@ -15,7 +15,7 @@ from proqu import paths
 ACTIVE = ("queued", "starting", "running")
 TERMINAL = ("succeeded", "failed", "killed", "cancelled")
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 SCHEMA = """
 CREATE TABLE jobs (
     id TEXT PRIMARY KEY,
@@ -59,7 +59,19 @@ CREATE TABLE waiters (
     pid_start INTEGER NOT NULL,
     PRIMARY KEY (job_id, pid)
 );
+CREATE TABLE held (
+    job_id TEXT PRIMARY KEY,
+    since REAL NOT NULL
+);
 """
+
+# each step takes the schema from the version before it to the next, by index
+# held jobs live in their own table, so a supervisor still running from an older
+# release keeps reading the jobs table it knows
+MIGRATIONS = (
+    "",
+    "CREATE TABLE held (job_id TEXT PRIMARY KEY, since REAL NOT NULL)",
+)
 
 # how long a command waits for another to release the queue lock
 LOCK_TIMEOUT = 60.0
@@ -145,6 +157,9 @@ class Store:
                 with self._flock():
                     if self._version() == 0:
                         self._create()
+            if 0 < self._version() < SCHEMA_VERSION:
+                with self._flock():
+                    self._migrate()
             version = self._version()
         except sqlite3.DatabaseError as error:
             raise StoreError(
@@ -172,6 +187,18 @@ class Store:
             self.conn.execute("ROLLBACK")
             raise
         self.conn.execute("COMMIT")
+
+    def _migrate(self) -> None:
+        """Bring an older schema up to date, one version at a time, each in one transaction."""
+        while 0 < (version := self._version()) < SCHEMA_VERSION:
+            self.conn.execute("BEGIN IMMEDIATE")
+            try:
+                self.conn.execute(MIGRATIONS[version])
+                self.conn.execute(f"PRAGMA user_version = {version + 1}")
+            except BaseException:
+                self.conn.execute("ROLLBACK")
+                raise
+            self.conn.execute("COMMIT")
 
     def close(self) -> None:
         self.conn.close()
@@ -287,6 +314,23 @@ class Store:
             "INSERT INTO sessions (session, bid_spent) VALUES (?, ?) "
             "ON CONFLICT (session) DO UPDATE SET bid_spent = bid_spent + excluded.bid_spent",
             (session, amount),
+        )
+
+    def held_since(self) -> dict[str, float]:
+        """When each queued job was first held back for free memory, by id."""
+        rows = self.conn.execute("SELECT job_id, since FROM held")
+        return {row["job_id"]: row["since"] for row in rows}
+
+    def mark_held(self, job_id: str, since: float) -> None:
+        """Record that a job was held back, keeping the first time it was."""
+        self.conn.execute(
+            "INSERT OR IGNORE INTO held (job_id, since) VALUES (?, ?)", (job_id, since)
+        )
+
+    def forget_held(self) -> None:
+        """Drop the held time of every job that is no longer queued."""
+        self.conn.execute(
+            "DELETE FROM held WHERE job_id NOT IN (SELECT id FROM jobs WHERE state = 'queued')"
         )
 
     def add_waiter(self, job_id: str, pid: int, pid_start: int) -> None:

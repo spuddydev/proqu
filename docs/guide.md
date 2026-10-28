@@ -76,8 +76,8 @@ The job runs with:
 - standard input closed
 - standard output and error written to its log
 - `PROQU_JOB_ID` set to its id
-- `CUDA_VISIBLE_DEVICES` set to the UUIDs of the GPUs it was given, and empty when it was given none
-- its CPUs pinned to the cores it was given
+- the GPU variables set for its GPUs, see [GPU rules](#gpu-rules)
+- its CPUs pinned to the cores it was given, except on macOS, which cannot pin
 
 ### status
 
@@ -87,7 +87,9 @@ proqu status [ID] [--all]
 
 With no id it lists active jobs, then the ten most recent finished ones. `--all` lists every finished job. With an id it shows one job in full: command, directory, request, bid, dependencies, exit code and peak RAM. Both end with the session's remaining bid budget.
 
-A queued job shows its position, projected start and projected finish. If it is held back only because other programs are using memory, it says "position N in the queue, waiting for memory other programs are using" (or "GPU memory"). It fits the queue and starts once that memory is free, so when it starts is uncertain. Other queued jobs then show "expected to start in X, or later while other programs use the memory". A running job shows how long it has run, when it is expected to end and how long until it is killed.
+A queued job shows its position, projected start and projected finish. If it is held back only because other programs are using memory, it says "position N in the queue, waiting for memory other programs are using" (or "GPU memory"). It fits the queue and starts once that memory is free, so when it starts is uncertain. Other queued jobs then show "expected to start in X, or later while other programs use the memory".
+
+A job held for longer than `hold_limit` also says "It has waited long enough that no later job may start ahead of it". Every later job then says "waiting behind an earlier job that has waited too long for memory other programs are using, so no later job may start until it has. When it starts is uncertain". It never names the other job. A running job shows how long it has run, when it is expected to end and how long until it is killed.
 
 ### wait
 
@@ -135,7 +137,7 @@ A queued job is cancelled at once and its bid is refunded. A starting or running
 proqu limits
 ```
 
-Shows what the queue may use: RAM, CPUs and GPUs, noting when a figure is below the machine's because of the reserve. It also shows which enforcement mode applies, how much is kept in reserve, the bid budget, the aging rate, the length delay and the share long jobs may hold. Run it before submitting. It detects the machine afresh.
+Shows what the queue may use: RAM, CPUs and GPUs, noting when a figure is below the machine's because of the reserve. It also shows which enforcement mode applies, how much is kept in reserve, the bid budget, the aging rate, the length delay, the share long jobs may hold and the hold limit. On an Apple silicon Mac the GPU line reads "GPU 0: NAME, which uses the RAM, so one job at a time and its GPU memory counts in --ram". On macOS it also says that `--cpus` is not enforced, that the Mac is kept awake, and that a job without `--gpus` is trusted not to use the GPU. Run it before submitting. It detects the machine afresh.
 
 ### config
 
@@ -192,13 +194,15 @@ A session sees its own bids and remaining budget. It never sees another session'
 
 Jobs are considered in priority order, with the delay for long jobs included. A job starts when the limits have enough RAM, cores and GPU memory for its whole request. A job never starts with less than it asked for.
 
-It must also fit the memory that is free right now. When a pass is about to start a job, it reads the free RAM from `MemAvailable` in `/proc/meminfo`. It subtracts what running jobs may still grow into, which is each job's `--ram` less what it uses now (a job that is still starting counts its whole request). The job starts only if its `--ram` fits what is left.
+It must also fit the memory that is free right now. When a pass is about to start a job, it reads the free RAM. On Linux that is `MemAvailable` in `/proc/meminfo`. On macOS it is an estimate from `vm_stat`, free plus inactive plus speculative pages, which is not checked against Activity Monitor. It subtracts what running jobs may still grow into, which is each job's `--ram` less what it uses now (a job that is still starting counts its whole request). The job starts only if its `--ram` fits what is left.
 
-GPU memory works the same way. proqu reads the free memory of each GPU from `nvidia-smi`, subtracts the unused part of running jobs' `--vram` on that GPU, and places the job on a GPU that has enough free. Hooks never read GPU memory, because `nvidia-smi` is too slow for them. So a GPU job starts in a pass from a command, from a job ending, or from the 10 second pass in `proqu wait`. If `nvidia-smi` cannot be read, GPU jobs wait, and status says "waiting until the free GPU memory can be read". If `MemAvailable` cannot be read, the limits alone decide on RAM.
+GPU memory works the same way. proqu reads the free memory of each GPU, from `nvidia-smi` or, for AMD, from sysfs (`mem_info_vram_total` less `mem_info_vram_used`). It subtracts the unused part of running jobs' `--vram` on that GPU, and places the job on a GPU that has enough free. Hooks never read GPU memory, because the query is too slow for them. So a GPU job starts in a pass from a command, from a job ending, or from the 10 second pass in `proqu wait`. If the free GPU memory cannot be read, GPU jobs wait, and status says "waiting until the free GPU memory can be read". If the free RAM cannot be read, the limits alone decide on RAM. The Apple silicon GPU uses the RAM, so it has no GPU memory to read.
 
 Free memory is read afresh at each pass that is about to start a job. Nothing is kept back from it, because the reserve already applies to the limits. CPU is not checked this way, since more work than cores only slows things down.
 
 A job held back by this stays queued. It never fails for it. Other programs using the memory is not the job's fault, and the memory may come free.
+
+Later jobs may pass a held job for only so long. See [Held jobs](#held-jobs).
 
 ### Long jobs
 
@@ -221,7 +225,18 @@ So small jobs fill the gaps while a large job waits, and the large job is not st
 
 Projected start and finish times assume every job takes its `--est`.
 
-The reservation, backfill and projections use the limits alone. They do not foresee other programs. The free memory check only ever delays a start. A job held for free memory counts as the first blocked job. A later job may go ahead of it only if it leaves room for it within the limits and fits the free memory. So later jobs can still pass a job that waits on other programs. Stopping the whole queue behind it could leave the machine idle for as long as another user holds the memory. Watch the status, and cancel a job that waits too long.
+The reservation, backfill and projections use the limits alone. They do not foresee other programs. The free memory check only ever delays a start. A job held for free memory counts as the first blocked job. A later job may go ahead of it only if it leaves room for it within the limits and fits the free memory. Projections do not change when a job is held.
+
+### Held jobs
+
+Later jobs may pass a held job, but only for `hold_limit`, 30 minutes by default. After that no later job in priority order starts until the held job has. Jobs ahead of it are not affected. This stops smaller jobs passing a large one for ever while another user holds the memory.
+
+- The time starts when a pass first holds the job back for RAM or GPU memory that other programs use. It is kept until the job leaves the queue. Being blocked for another reason does not reset it, as restarting the clock would let smaller jobs pass for ever.
+- A GPU that cannot be read starts no clock, as it says nothing about other programs.
+- `hold_limit` of `0` turns the rule off, so later jobs may always pass.
+- `proqu limits` shows the rule when it is on.
+
+Watch the status, and cancel a job that waits too long.
 
 ### Dependencies
 
@@ -237,7 +252,11 @@ A failed dependency is reported with the parent's id. The bid of a job that neve
 
 ### What the limits are
 
-The queue may use what the machine has, as detected at run time, minus a reserve. The detection includes any memory limit or CPU quota on the cgroup that proqu itself runs in. The usable cores are the ones proqu itself may run on, trimmed to any quota, so their numbers may not start at 0 or be in a row. If an `nvidia-smi` query fails, proqu keeps the GPU list it had before. Anything over the limit is refused at submit. These limits are the ceiling. The memory free at start time is a separate check, described under [Starting jobs](#starting-jobs), and it can only delay a job that fits the limits.
+The queue may use what the machine has, as detected at run time, minus a reserve. On Linux the detection includes any memory limit or CPU quota on the cgroup that proqu itself runs in. The usable cores are the ones proqu itself may run on, trimmed to any quota, so their numbers may not start at 0 or be in a row. On macOS every logical core counts, performance and efficiency alike. If a GPU query fails, proqu keeps the GPU list it had before.
+
+GPUs are of one vendor per machine. NVIDIA comes first, if `nvidia-smi` lists any. Otherwise AMD is used. On a Mac with Apple silicon the GPU is offered as one slot, see [GPU rules](#gpu-rules).
+
+Anything over the limit is refused at submit. These limits are the ceiling. The memory free at start time is a separate check, described under [Starting jobs](#starting-jobs), and it can only delay a job that fits the limits.
 
 The reserve keeps some of the machine free for services and interactive work:
 
@@ -247,11 +266,17 @@ The reserve keeps some of the machine free for services and interactive work:
 
 The owner can change the reserve with `reserve_ram` and `reserve_cpus`, and can lower the limits further. Lowering `ram` is not needed to protect memory that other users hold, because a job waits for free memory anyway. It still caps what the queue may use in total. See [Config](#config). Agents should not change either.
 
-CPU cores are handed out by number. Each job is pinned to its own cores, so jobs do not share them.
+CPU cores are handed out by number. On Linux each job is pinned to its own cores, so jobs do not share them. macOS cannot pin a process to cores. There `--cpus` is counted for scheduling but not enforced, so a job should run with that many threads.
 
-### Two enforcement modes
+### Enforcement modes
 
-proqu enforces RAM and CPU in one of two modes. `proqu limits` shows which one applies.
+proqu enforces RAM and CPU in one of three modes. `proqu limits` shows which one applies.
+
+| Mode | Platform | RAM | CPU |
+| --- | --- | --- | --- |
+| Cgroup | Linux with systemd | Kernel cap | Kernel quota and pinning |
+| Watch | Linux without cgroups | Sampled once a second | Pinning only |
+| Watch | macOS, always | Sampled four times a second | Counted, not enforced |
 
 Cgroup mode, enforced by the kernel. Each job runs in its own systemd user scope with:
 
@@ -267,20 +292,38 @@ It needs all of these:
 
 Watch mode is the fallback. A supervisor adds up the memory of every process in the job once a second and kills the job when the total is over `--ram`. Shared pages are counted once. CPU is limited only by pinning to the assigned cores.
 
+On macOS there are no cgroups, so a job is always watched. RAM is the memory footprint of each process, which is what Activity Monitor shows as Memory, including compressed memory and GPU memory. It is summed over the job's processes and checked four times a second. Footprint counts pages shared between a job's processes for each of them, so a job of many processes sharing memory may be killed a little early. After the job ends the kernel's peak RSS is used for the recorded peak only. The Mac is kept from idle sleep while a job runs, with `caffeinate -i -w`, because sleep would pause the job but not its max runtime clock. Job processes are found by session, or by `PROQU_JOB_ID` in their environment, as on Linux.
+
 proqu probes for cgroup support and remembers the answer for a day. If a scope fails to start, proqu runs that job in watch mode and forgets the answer, so the next job probes again. If the memory cap was not applied, RAM is watched as well.
 
 ### GPU rules
 
-GPU use is checked by watching in both modes, because cgroups cannot do it.
+GPU use is checked by watching in every mode, because cgroups cannot do it.
 
-- `--gpus` and `--vram` go together. A job with `--gpus` and no `--vram` is refused.
+- `--gpus` and `--vram` go together. A job with `--gpus` and no `--vram` is refused, except on Apple silicon, see below.
 - `--vram` is per GPU. The job gets that many GPUs, each with at least that much memory.
 - The scheduler gives a job the GPUs with the least free memory that still fit, to keep large GPUs free.
-- `CUDA_VISIBLE_DEVICES` holds only the GPUs the job was given.
-- Every 5 seconds proqu asks `nvidia-smi` which processes use which GPU.
+- NVIDIA jobs get `CUDA_VISIBLE_DEVICES` holding only the GPUs they were given.
+- Every 5 seconds proqu finds which processes use which GPU. On NVIDIA it asks `nvidia-smi`.
 - A job is killed if it uses a GPU while having asked for none, uses a GPU it was not given, or uses more GPU memory than `--vram` on one GPU.
 - GPUs in MIG mode are not offered to the queue.
-- If `nvidia-smi` cannot be queried, GPU limits are not checked. A line is written to the job's supervisor log.
+- If the GPU query fails, GPU limits are not checked. A line is written to the job's supervisor log.
+
+AMD GPUs on Linux:
+
+- They are found in sysfs, with no tool needed. GPUs with under 1 GiB of VRAM (APUs) and partitioned GPUs (a compute partition other than SPX) are skipped.
+- A GPU is named `GPU-` and 16 hex digits from its KFD unique id, or `AMD-N` for index N without one. The index is the ROCm runtime's device index.
+- A job gets `ROCR_VISIBLE_DEVICES` set to its GPUs, by name where known, else by index. `HIP_VISIBLE_DEVICES`, `CUDA_VISIBLE_DEVICES` and `GPU_DEVICE_ORDINAL` are removed, because the ROCm variables stack and would filter again. A job with no GPU gets all four set to `-1`.
+- Per process GPU memory is read from KFD sysfs, else DRM fdinfo, else `amd-smi`, every 5 seconds. Only memory actually in use counts, as the ROCm runtime opens every GPU when it starts.
+- Everything AMD is untested on real hardware.
+
+Apple silicon on macOS:
+
+- The GPU is offered as one GPU, index 0, named from the chip, for example `apple-m2-max`. Its memory is the RAM.
+- Ask for it with `--gpus 1` and no `--vram`. `--vram` is refused, with a message to count GPU memory in `--ram`.
+- One job at a time holds it, so GPU jobs run one after another.
+- Its use cannot be watched or enforced, as Metal has no visibility variable. A job without `--gpus` is trusted not to use the GPU, and no GPU kill reasons apply.
+- Intel Macs are offered no GPU.
 
 ### Max runtime
 
@@ -299,8 +342,8 @@ Every kill is reported with the limit and what was measured. A kill is always th
 | Used more than its RAM limit | Measure the real peak, or cut batch size, workers or parallelism. Raise `--ram` only if it truly needs more. |
 | Still running at its max runtime | Look in the log for a hang first. Raise `--max` only if it was making progress. |
 | Used a GPU without asking for one | Resubmit with `--gpus` and `--vram`. |
-| Used a GPU that was not given to it | Use only the GPUs in `CUDA_VISIBLE_DEVICES`. |
-| Used more GPU memory than its `--vram` | Measure with `nvidia-smi` and resubmit with the real figure. |
+| Used a GPU that was not given to it | Use only the GPUs in `CUDA_VISIBLE_DEVICES`, or `ROCR_VISIBLE_DEVICES` on AMD. |
+| Used more GPU memory than its `--vram` | Measure with `nvidia-smi`, or `amd-smi` or `rocm-smi` on AMD, and resubmit with the real figure. |
 | Changed the memory limit of its own cgroup | A job must not change its own limits. Remove that from the job. |
 
 In cgroup mode a job that dies of SIGKILL while its peak RAM was at least 90% of its limit is also reported as a RAM kill, whoever sent the signal.
@@ -388,6 +431,7 @@ proqu config unset ram
 | `length_delay_cap` | Most a long job is delayed in the queue order. `0` for no delay. See [Priority](#priority). | 4h |
 | `long_job_after` | A job with a `--max` over this is long. See [Long jobs](#long-jobs). | 12h |
 | `long_job_share` | Percent of RAM, cores and each GPU's memory long jobs may hold together, a whole number from 1 to 100. `75` and `75%` both work. `100` turns the cap off. | 75% |
+| `hold_limit` | How long later jobs may pass a job held for memory other programs use. `0` lets them always pass. See [Held jobs](#held-jobs). | 30m |
 | `kill_grace` | Time between the polite and the forced kill. Must be more than zero. | 10s |
 
 A `ram`, `cpus`, `gpus` or `vram` above what the machine has is refused, and so is a reserve that would leave nothing for jobs. Jobs already running keep what they were given. A queued job that no longer fits fails with a reason that says the limits were lowered. If the reserve alone is what stops it fitting, the reason names the reserve. A job held back only for free memory does not fail. It waits.
@@ -411,7 +455,7 @@ An owner running `proqu` without `PROQU_SESSION` uses the shared `default` sessi
 There is no skill, so there are no hooks and no reminders. A person or another agent should read `skills/proqu/SKILL.md` in the repository. The essential rules are:
 
 - Queue only heavy work, such as training, large builds and long simulations. Never queue services or quick tasks.
-- Measure RAM and cores honestly before submitting, for example with `/usr/bin/time -v`. Use `nvidia-smi` for GPU memory.
+- Measure RAM and cores honestly before submitting, for example with `/usr/bin/time -v` on Linux, or Activity Monitor or `footprint` on macOS. Use `nvidia-smi` for NVIDIA GPU memory and `amd-smi` or `rocm-smi` for AMD.
 - Set `--max` to 1.5 to 3 times `--est`.
 - Run `proqu wait ID` so you hear when the job ends. It must stay running, for example in a background process. It exits 0 only if the job succeeded.
 - Set `PROQU_SESSION` to a name of your own, or everyone shares `default`.

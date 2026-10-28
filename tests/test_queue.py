@@ -13,7 +13,7 @@ from proqu.cli import main
 from proqu.store import Store
 
 G = 1024**3
-CPUS = tuple(sorted(os.sched_getaffinity(0)))[:2]
+CPUS = tuple(sorted(machine.available_cpus()))[:2]
 
 
 @pytest.fixture
@@ -23,6 +23,8 @@ def queue(tmp_path, monkeypatch):
     monkeypatch.delenv("PROQU_JOB_ID", raising=False)
     small = machine.Machine(ram=4 * G, cpu_ids=CPUS, gpus=())
     monkeypatch.setattr(machine, "snapshot", lambda refresh=False: small)
+    # the host's free memory varies from runner to runner, the tests that need it set it
+    monkeypatch.setattr(machine, "free_ram", lambda: None)
     paths.config_path().write_text(json.dumps({"reserve_ram": 0, "reserve_cpus": 0}))
     yield tmp_path
     for job in Store().active():
@@ -418,7 +420,8 @@ def test_long_jobs_wait_for_their_share(queue, capsys):
     assert "expected to start in" in capsys.readouterr().out
     main(["config", "set", "long_job_share", "100"])
     tick.tick()
-    assert settle([second.id])[0].state == "succeeded"
+    done = settle([second.id])[0]
+    assert done.state == "succeeded", done.reason
     main(["cancel", first.id])
     settle([first.id])
 
@@ -516,3 +519,82 @@ def test_hook_passes_never_start_gpu_jobs(queue, monkeypatch):
     monkeypatch.delenv("PROQU_JOB_ID")
     assert tick.tick(cached_only=True) == {job.id: "gpu-unread"}
     assert Store().get(job.id).state == "queued"
+
+
+def test_hold_time_is_kept_from_the_first_hold_and_cleared_on_start(queue, monkeypatch):
+    monkeypatch.setattr(machine, "free_ram", lambda: G // 2)
+    job = submit(command=("true",))
+    first = Store().held_since()[job.id]
+    tick.tick()
+    assert Store().held_since() == {job.id: first}
+    monkeypatch.setattr(machine, "free_ram", lambda: 3 * G)
+    tick.tick()
+    assert Store().held_since() == {}
+    assert settle([job.id])[0].state == "succeeded"
+
+
+def test_job_held_past_the_hold_limit_stops_later_jobs(queue, monkeypatch, capsys):
+    monkeypatch.setattr(machine, "free_ram", lambda: 3 * G // 2)
+    big = submit("--ram", "2G", command=("true",))
+    store = Store()
+    with store.locked():
+        store.update(big.id, submitted_at=time.time() - 7200)
+        store.conn.execute("UPDATE held SET since = ?", (time.time() - 3600,))
+    small = submit(command=("true",))
+    assert Store().get(small.id).state == "queued"
+    assert tick.tick() == {big.id: "overdue-ram", small.id: "behind"}
+    # waiting behind is not being held, so it starts no clock of its own
+    assert set(Store().held_since()) == {big.id}
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "no later job may start ahead of it" in out
+    assert "waiting behind an earlier job that has waited too long" in out
+    monkeypatch.setattr(machine, "free_ram", lambda: 4 * G)
+    tick.tick()
+    assert [job.state for job in settle([big.id, small.id])] == ["succeeded", "succeeded"]
+
+
+def test_unread_gpu_memory_starts_no_hold_clock(queue, monkeypatch):
+    gpu = machine.Machine(ram=4 * G, cpu_ids=CPUS, gpus=(machine.GpuInfo(0, "GPU-a", 8 * G),))
+    monkeypatch.setattr(machine, "snapshot", lambda refresh=False: gpu)
+    monkeypatch.setattr(machine, "free_vram", lambda: None)
+    submit("--gpus", "1", "--vram", "4G", command=("true",))
+    assert Store().held_since() == {}
+
+
+APPLE = machine.Machine(ram=4 * G, cpu_ids=CPUS, gpus=(machine.GpuInfo(0, "apple-m2", 0, "apple"),))
+
+
+@pytest.mark.skipif(len(CPUS) < 2, reason="needs two CPUs")
+def test_a_gpu_that_uses_the_ram_runs_one_job_at_a_time(queue, monkeypatch):
+    monkeypatch.setattr(machine, "snapshot", lambda refresh=False: APPLE)
+    first = submit("--gpus", "1", command=("sleep", "30"))
+    assert Store().get(first.id).state in ("starting", "running")
+    second = submit("--gpus", "1", command=("true",))
+    plain = submit(command=("sleep", "30"))
+    assert Store().get(second.id).state == "queued"
+    assert Store().get(plain.id).state in ("starting", "running")
+    # supervisors detect the real machine, so what follows is left to the scheduler tests
+    for job in (second, plain, first):
+        main(["cancel", job.id])
+    settle([first.id, plain.id])
+
+
+def test_a_gpu_that_uses_the_ram_refuses_vram(queue, monkeypatch, capsys):
+    monkeypatch.setattr(machine, "snapshot", lambda refresh=False: APPLE)
+    request = ["submit", "--ram", "1G", "--cpus", "1", "--est", "2s", "--max", "30s"]
+    assert main([*request, "--gpus", "1", "--vram", "4G", "--", "true"]) == 2
+    assert "count the GPU memory the job needs in --ram" in capsys.readouterr().err
+    assert main([*request, "--gpus", "2", "--", "true"]) == 2
+    assert "use --gpus 1" in capsys.readouterr().err
+
+
+def test_limits_and_status_describe_a_gpu_that_uses_the_ram(queue, monkeypatch, capsys):
+    monkeypatch.setattr(machine, "snapshot", lambda refresh=False: APPLE)
+    monkeypatch.setattr(machine, "free_vram", lambda: None)
+    assert main(["limits"]) == 0
+    assert "GPU 0: apple-m2, which uses the RAM, so one job at a time" in capsys.readouterr().out
+    job = submit("--gpus", "1", command=("true",))
+    assert "1 GPU using the RAM" in capsys.readouterr().out
+    settle([job.id])

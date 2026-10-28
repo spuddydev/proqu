@@ -21,7 +21,7 @@ A shared compute queue that lets coding agents submit heavy jobs and share a mac
 
 - A submit gives the command, RAM, CPU cores, an estimated runtime and a maximum runtime. GPU is optional.
 - Anything over the machine limit is refused. Limits default to the machine minus a small reserve for services and interactive work. Config can change the reserve or only lower the limits further.
-- Limits are hard. RAM and CPU use cgroups when available, with a watch and kill fallback. A job that asked for no GPU may not use one.
+- Limits are hard. RAM and CPU use cgroups when available, with a watch and kill fallback. macOS has no cgroups and always watches. A job that asked for no GPU may not use one.
 - A job is killed when it hits its maximum runtime.
 - Every kill is reported to the agent with a reason that makes clear it was the job's fault.
 - A job may depend on another of the same session's jobs. It never starts first, and fails if its parent fails.
@@ -33,6 +33,7 @@ A shared compute queue that lets coding agents submit heavy jobs and share a mac
 - Jobs start in priority order. A later job may start ahead only if it fits and its maximum runtime ends before the reserved start of the first blocked job (backfill), so large jobs are not starved.
 - Jobs with a maximum runtime over 12 hours together hold at most 75% of RAM, cores and each GPU's memory. Both are configurable. A long job larger than that runs only when no other long job is running.
 - A job also starts only when it fits the memory free right now, less what running jobs may still grow into. This covers RAM and GPU memory used by other programs. It only ever delays a start, and status says when a job waits for it.
+- Later jobs may pass a job held for that memory, but only for `hold_limit`, 30 minutes by default. After that no later job starts until it has. The clock starts at the first hold and is kept until the job leaves the queue.
 
 ### Visibility
 
@@ -42,8 +43,8 @@ A shared compute queue that lets coding agents submit heavy jobs and share a mac
 
 ### Scope
 
-- Linux first. macOS later.
-- NVIDIA GPUs first.
+- Linux and macOS. macOS limits are watched, not enforced by the kernel.
+- NVIDIA and AMD GPUs on Linux, and the Apple silicon GPU as one slot. AMD is untested on hardware.
 - Not for small or quick tasks. The skill says so with examples.
 - Services and multi-week jobs never go through proqu.
 

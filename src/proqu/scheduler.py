@@ -7,6 +7,7 @@ Contract with the caller:
 - gpu_ids are Gpu.index values. Limits are already lowered by config.
 - free, when given, is the memory free right now for new jobs. It only ever holds a
   job back. Reservations, backfill and projections stay on the limits alone.
+- held_since on a queued job is when a pass first held it back for free memory.
 """
 
 from __future__ import annotations
@@ -73,6 +74,7 @@ class Queued:
     est: float
     max: float
     after: tuple[str, ...] = ()
+    held_since: float | None = None
 
 
 @dataclass(frozen=True)
@@ -104,7 +106,9 @@ class Free:
 class Plan:
     start: list[Start]
     fail: list[Fail]
-    # jobs that fit the limits but not the memory free now, by id, with what they lack
+    # jobs that fit the limits but not the memory free now, by id, with what they lack:
+    # "ram", "gpu" or "gpu-unread", prefixed "overdue-" for a job held past the hold
+    # limit, and "behind" for every later job, which may not start ahead of it
     held: dict[str, str] = field(default_factory=dict)
 
 
@@ -344,12 +348,15 @@ def plan(
     delay_cap: float = 0,
     free: Free | None = None,
     share: Share | None = None,
+    hold_limit: float = 0,
 ) -> Plan:
     """Which queued jobs start now, which fail and which wait for free memory.
 
     Fails are in score order. A job held for free memory counts as blocked, so when
     it is the first blocked job its place is reserved from now and later jobs may
-    only start if they leave room for it.
+    only start if they leave room for it. Once a job has been held for longer than
+    hold_limit, no later job starts at all until it has, so jobs that fit the free
+    memory cannot pass it forever. A hold_limit of 0 never stops them.
     """
     running = [replace(r, req=_tag(r.req, r.max, share)) for r in running]
     queued = [replace(q, req=_tag(q.req, q.max, share)) for q in queued]
@@ -366,8 +373,12 @@ def plan(
     held: dict[str, str] = {}
     free_ram = free.ram if free else 0
     free_vram = dict(free.vram) if free and free.vram is not None else None
+    overdue = False
     for q in ordered:
         if q.id in doomed or any(d in live for d in q.after):
+            continue
+        if overdue:
+            held[q.id] = "behind"
             continue
         fit = pool.fit(q.req)
         if fit is None:
@@ -385,6 +396,10 @@ def plan(
             lacking, live_fit = _live_fit(pool, q.req, free_ram, free_vram)
             if lacking or live_fit is None:
                 held[q.id] = lacking or "gpu"
+                waited = now - q.held_since if q.held_since is not None else 0
+                if hold_limit and waited > hold_limit:
+                    overdue = True
+                    held[q.id] = f"overdue-{held[q.id]}"
                 if not blocked:
                     blocked = True
                     reserved = (now, q.req, pool.copy())
