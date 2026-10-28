@@ -2,7 +2,7 @@
 
 A shared compute queue for coding agents.
 
-Coding agents such as Claude Code use proqu to run heavy jobs (model training, large builds, long simulations) on a machine they share. Each job states the RAM, CPU cores and GPUs it needs and how long it may run. proqu starts jobs when they fit, enforces those limits, and wakes the agent when its job ends.
+Coding agents such as Claude Code use proqu to run heavy jobs (model training, large builds, long simulations) on a machine they share. Each job states the RAM, CPU cores and GPUs it needs and how long it may run. proqu starts jobs when they fit, enforces those limits, and wakes the agent when its job ends. It keeps a small reserve of RAM and one core back for services and interactive work.
 
 The user of proqu is the agent. The person who owns the machine installs it, and can set limits for it.
 
@@ -23,8 +23,12 @@ Clone the repository and put `bin/proqu` on your PATH:
 
 ```sh
 git clone https://github.com/spuddydev/proqu
+mkdir -p ~/.local/bin
 ln -s "$PWD/proqu/bin/proqu" ~/.local/bin/proqu
+proqu limits
 ```
+
+`~/.local/bin` must be on your PATH. The link can be followed from any directory.
 
 Without the hooks, every caller shares one session called `default`. Set `PROQU_SESSION` to give a caller its own.
 
