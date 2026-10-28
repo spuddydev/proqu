@@ -184,7 +184,7 @@ def test_failing_gpu_query_is_ignored(home, tmp_path, monkeypatch, capsys):
     (bin_dir / "nvidia-smi").chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
     monkeypatch.setattr(limits, "GPU_EVERY", 0.2)
-    job = starting_job(["sleep", "1.5"])
+    job = starting_job(["sleep", "3"])
     runner.supervise(job.id)
     assert ended(job).state == "succeeded"
     assert capsys.readouterr().out.count("could not query GPU use") == 1
