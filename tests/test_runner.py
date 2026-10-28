@@ -135,3 +135,30 @@ def test_spawned_supervisor_runs_the_job_detached(home):
     assert "hello" in log_of(job)
     time.sleep(0.2)
     assert not procs.is_alive(pid, ticks)
+
+
+def test_job_is_stopped_at_its_max_runtime(home):
+    job = starting_job(["sleep", "30"], max=1)
+    started = time.monotonic()
+    runner.supervise(job.id)
+    done = ended(job)
+    assert done.state == "killed"
+    assert done.reason.startswith("still running at its max runtime of 1s")
+    assert time.monotonic() - started < 10
+
+
+def test_stubborn_job_is_killed_after_the_grace(home, monkeypatch):
+    from proqu import config
+
+    monkeypatch.setattr(config, "load", lambda path: {"kill_grace": 1})
+    job = starting_job(["sh", "-c", "trap '' TERM; sleep 30"], max=1)
+    started = time.monotonic()
+    runner.supervise(job.id)
+    assert ended(job).state == "killed"
+    assert 2 <= time.monotonic() - started < 10
+
+
+def test_job_that_exits_cleanly_after_the_polite_kill_still_counts_as_killed(home):
+    job = starting_job(["sh", "-c", "trap 'exit 0' TERM; sleep 30 & wait"], max=1)
+    runner.supervise(job.id)
+    assert ended(job).state == "killed"

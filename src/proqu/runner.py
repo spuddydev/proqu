@@ -15,6 +15,7 @@ from pathlib import Path
 
 from proqu import config, machine, paths, procs
 from proqu.store import Job, Store
+from proqu.units import format_duration
 
 # how often the supervisor looks at its job
 POLL = 1.0
@@ -123,12 +124,19 @@ def launch(job: Job, log) -> subprocess.Popen:
 
 def watch(store: Store, job: Job, proc: subprocess.Popen) -> tuple[str, str] | None:
     """Wait for the job, returning why it had to be stopped, or None if it ended."""
+    deadline = time.monotonic() + job.max
     while True:
         try:
-            proc.wait(timeout=POLL)
+            proc.wait(timeout=min(POLL, max(0.0, deadline - time.monotonic())))
             return None
         except subprocess.TimeoutExpired:
             pass
+        if time.monotonic() >= deadline:
+            return (
+                "killed",
+                f"still running at its max runtime of {format_duration(job.max)}: "
+                "if it was making progress, resubmit with a larger --max, otherwise find the hang",
+            )
 
 
 def stop_members(job_id: str, session: int, grace: float) -> None:
