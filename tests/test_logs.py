@@ -53,3 +53,10 @@ def test_negative_tail_is_refused(home, capsys):
     job = submit()
     assert main(["logs", job.id, "--tail", "-1"]) == 2
     assert "cannot be negative" in capsys.readouterr().err
+
+
+def test_tail_help_says_the_window_can_cut_lines_short(capsys):
+    with pytest.raises(SystemExit):
+        main(["logs", "--help"])
+    out = " ".join(capsys.readouterr().out.split())
+    assert "256 KiB" in out and "0 for the whole log" in out

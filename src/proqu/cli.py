@@ -626,7 +626,14 @@ def build_parser() -> argparse.ArgumentParser:
     logs = commands.add_parser("logs", help="show the output of one of this session's jobs")
     logs.add_argument("id", help="the job id from submit or status")
     logs.add_argument(
-        "--tail", type=int, default=200, metavar="N", help="last N lines (default 200, 0 for all)"
+        "--tail",
+        type=int,
+        default=200,
+        metavar="N",
+        help=(
+            "last N lines, taken from the last 256 KiB of the log so fewer come back when "
+            "lines are long (default 200, 0 for the whole log)"
+        ),
     )
     logs.set_defaults(handler=cmd_logs)
 
