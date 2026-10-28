@@ -9,6 +9,7 @@ import sys
 import time
 
 from proqu import config, machine, paths
+from proqu import tick as ticking
 from proqu.store import ACTIVE, TERMINAL, Job, LockTimeout, Store, StoreError
 from proqu.units import format_duration, format_size, parse_duration, parse_size
 
@@ -119,10 +120,16 @@ def cmd_submit(args, command: list[str]) -> int:
         store.insert(job)
         if job.bid:
             store.add_bid_spent(session, job.bid)
+    run_pass(store)
+    now = own_job(store, job.id)
 
     label = f" ({job.name})" if job.name else ""
+    if now.state in TERMINAL:
+        print(f"Job {job.id}{label} {now.state} at once: {now.reason or 'no reason recorded'}")
+        return 1
+    verb = "Queued" if now.state == "queued" else "Started"
     print(
-        f"Queued job {job.id}{label}: {describe_request(ram, args.cpus, args.gpus, vram)}, ", end=""
+        f"{verb} job {job.id}{label}: {describe_request(ram, args.cpus, args.gpus, vram)}, ", end=""
     )
     print(f"estimated {format_duration(est)}, killed at {format_duration(max_time)}.")
     if after:
@@ -215,8 +222,19 @@ def check_dependencies(store: Store, session: str, after: list[str]) -> list[str
 RECENT_FINISHED = 10
 
 
+def run_pass(store: Store) -> None:
+    """Move the queue on. A failed pass is only a warning, the command's own change stands."""
+    try:
+        ticking.tick(store)
+    except (LockTimeout, StoreError, OSError, sqlite3.Error) as error:
+        print(
+            f"proqu: warning: the queue could not be moved on just now ({error})", file=sys.stderr
+        )
+
+
 def cmd_status(args, command: list[str]) -> int:
     store = Store()
+    run_pass(store)
     session = current_session()
     now = time.time()
     if args.id:
@@ -303,10 +321,12 @@ def cmd_cancel(args, command: list[str]) -> int:
             if job.bid:
                 store.add_bid_spent(session, -job.bid)
             refund = f", bid of {job.bid} refunded" if job.bid else ""
-            print(f"Cancelled job {job.id} before it started{refund}.")
-            return 0
-        store.update(job.id, cancel_requested=True)
-    print(f"Cancel requested for job {job.id}, it will be stopped shortly.")
+            message = f"Cancelled job {job.id} before it started{refund}."
+        else:
+            store.update(job.id, cancel_requested=True)
+            message = f"Cancel requested for job {job.id}, it will be stopped shortly."
+    run_pass(store)
+    print(message)
     return 0
 
 
