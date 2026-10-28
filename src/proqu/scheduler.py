@@ -184,7 +184,7 @@ def _doomed(
 
 
 def _reserve(
-    pool: _Pool, releases: list[tuple[float, _Held]], req: Request, now: float
+    pool: _Pool, releases: list[tuple[float, _Held]], req: Request
 ) -> tuple[float, _Pool] | None:
     """The earliest time the request fits as jobs reach their hard end, and the pool then."""
     pool = pool.copy()
@@ -195,7 +195,7 @@ def _reserve(
         if i + 1 < len(releases) and releases[i + 1][0] == end:
             continue
         if pool.fit(req):
-            return max(end, now), pool
+            return end, pool
     return None
 
 
@@ -226,7 +226,7 @@ def plan(
             if not blocked:
                 blocked = True
                 # Never None for a job within the limits, as all releases restore them.
-                found = _reserve(pool, releases, q.req, now)
+                found = _reserve(pool, releases, q.req)
                 if found:
                     reserved = (found[0], q.req, found[1])
             continue
