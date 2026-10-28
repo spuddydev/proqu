@@ -18,7 +18,7 @@ jobs:
       - run: uv run pytest
       - name: check the tag matches the version
         run: test "$(python3 bin/proqu --version)" = "proqu ${GITHUB_REF_NAME#v}"
-      # the installer downloads this archive, it holds only what proqu needs to run
+      # the installer downloads this archive, .gitattributes keeps tests and dev files out of it
       - run: git archive --format=tar.gz --prefix=proqu/ -o proqu.tar.gz "$GITHUB_REF_NAME"
       - run: gh release create "$GITHUB_REF_NAME" proqu.tar.gz install.sh --generate-notes --verify-tag
         env:
