@@ -541,6 +541,8 @@ def test_job_held_past_the_hold_limit_stops_later_jobs(queue, monkeypatch, capsy
     small = submit(command=("true",))
     assert Store().get(small.id).state == "queued"
     assert tick.tick() == {big.id: "overdue-ram", small.id: "behind"}
+    # waiting behind is not being held, so it starts no clock of its own
+    assert set(Store().held_since()) == {big.id}
     capsys.readouterr()
     assert main(["status"]) == 0
     out = capsys.readouterr().out
