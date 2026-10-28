@@ -317,3 +317,19 @@ def test_wait_reports_a_job_failed_by_its_parent(queue, quick, capsys):
     out = capsys.readouterr().out
     assert f"Job {child.id} failed before it started: job {parent.id}, which it waits for" in out
     assert "resubmit the job it waits for first" in out
+
+
+def test_wait_reports_a_job_whose_supervisor_was_lost(queue, quick, capsys):
+    job = submit(command=("sleep", "30"))
+    proc_pid = Store().get(job.id).supervisor_pid
+    os.kill(proc_pid, 9)
+    deadline = time.monotonic() + 10
+    while procs.is_alive(proc_pid, Store().get(job.id).supervisor_start):
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    capsys.readouterr()
+    assert main(["wait", job.id]) == 1
+    out = capsys.readouterr().out
+    assert f"Job {job.id} failed" in out
+    assert "its supervisor was lost" in out
+    assert "this was not the job's fault, resubmit it" in out
