@@ -133,7 +133,7 @@ def test_limits_show_the_default_reserve(home, capsys):
     out = capsys.readouterr().out
     assert "RAM: 14.4G (of 16.0G, after the reserve)" in out
     assert "CPUs: 3 (of 4, after the reserve)" in out
-    assert "Kept in reserve for services and interactive work: 1.5G RAM and 1 CPU cores" in out
+    assert "Kept in reserve for services and interactive work: 1.5G RAM and 1 CPU core." in out
 
 
 def test_limits_blame_config_when_it_lowers_to_the_reserved_figure(home, capsys):

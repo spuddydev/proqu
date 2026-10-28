@@ -605,8 +605,8 @@ def cmd_limits(args, command: list[str]) -> int:
         )
     print(
         f"Kept in reserve for services and interactive work: {format_size(held_ram)} RAM and "
-        f"{held_cpus} CPU cores. Only the machine's owner should change it, with reserve_ram and "
-        "reserve_cpus in `proqu config`."
+        f"{held_cpus} CPU {'core' if held_cpus == 1 else 'cores'}. Only the machine's owner "
+        "should change it, with reserve_ram and reserve_cpus in `proqu config`."
     )
     print(f"Each session may bid up to {settings.bid_budget} points in total.")
     print(f"Every queued job gains {settings.aging_per_minute:g} priority points per minute.")
