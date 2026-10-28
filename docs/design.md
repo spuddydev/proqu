@@ -101,10 +101,10 @@ A job held back for this stays queued. It never fails for it. Projections, reser
 
 Trade-offs:
 
-- Free memory is read afresh at each pass that is about to start a job, and never cached. It costs a read of `/proc/meminfo` and, for GPU jobs, a run of `nvidia-smi`.
-- Hooks never read GPU memory, because `nvidia-smi` is too slow. A GPU job starts only in a pass from a command, a supervisor ending, or the 10 second pass in `proqu wait`. If `nvidia-smi` cannot be read, GPU jobs wait. If `MemAvailable` cannot be read, the limits alone decide.
+- Free memory is read afresh at each pass that is about to start a job, and never cached. It costs a read of `/proc/meminfo` and one look through `/proc` for the processes of running jobs. For GPU jobs it also runs `nvidia-smi` for the free memory and, when jobs already hold GPUs, again for their use. It happens with the queue locked, so the free memory read gives up after 5 seconds.
+- Hooks never read GPU memory, because `nvidia-smi` is too slow. A GPU job starts only in a pass from a command, a supervisor ending, or the 10 second pass in `proqu wait`. If the free GPU memory cannot be read, GPU jobs wait. If only the use of running jobs cannot be read, each counts its whole `--vram`. If `MemAvailable` cannot be read, the limits alone decide on RAM.
 - It is a check at start time and it is racy. Another program can take the memory a moment later, and nothing stops it after the job has started.
-- Smaller jobs can go ahead of a held job if they leave room for it within the limits and fit the free memory. Stopping the whole queue behind it could idle the machine for as long as another user holds the memory. The agent can see the wait in status and cancel.
+- Later jobs can go ahead of a held job if they leave room for it within the limits and fit the free memory. Stopping the whole queue behind it could idle the machine for as long as another user holds the memory. The agent can see the wait in status and cancel.
 - No reserve or margin is taken off the free figure. The reserve applies to the limits only. Taking it off twice would leave a job sized to the limit unable to start even on an idle machine.
 - A job's use is its proportional set size. File backed pages counted in it make the figure slightly wrong.
 - In a container, free memory is the host's `MemAvailable`. The limits already respect a cgroup memory limit.

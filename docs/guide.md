@@ -194,7 +194,7 @@ Jobs are considered in priority order, with the delay for long jobs included. A 
 
 It must also fit the memory that is free right now. When a pass is about to start a job, it reads the free RAM from `MemAvailable` in `/proc/meminfo`. It subtracts what running jobs may still grow into, which is each job's `--ram` less what it uses now (a job that is still starting counts its whole request). The job starts only if its `--ram` fits what is left.
 
-GPU memory works the same way. proqu reads the free memory of each GPU from `nvidia-smi`, subtracts the unused part of running jobs' `--vram` on that GPU, and places the job on a GPU that has enough free. Hooks never read GPU memory, because `nvidia-smi` is too slow for them. So a GPU job starts in a pass from a command, from a job ending, or from the 10 second pass in `proqu wait`. If `nvidia-smi` cannot be read, GPU jobs wait, and status says "waiting until the free GPU memory can be read". If `MemAvailable` cannot be read, the limits alone decide.
+GPU memory works the same way. proqu reads the free memory of each GPU from `nvidia-smi`, subtracts the unused part of running jobs' `--vram` on that GPU, and places the job on a GPU that has enough free. Hooks never read GPU memory, because `nvidia-smi` is too slow for them. So a GPU job starts in a pass from a command, from a job ending, or from the 10 second pass in `proqu wait`. If `nvidia-smi` cannot be read, GPU jobs wait, and status says "waiting until the free GPU memory can be read". If `MemAvailable` cannot be read, the limits alone decide on RAM.
 
 Free memory is read afresh at each pass that is about to start a job. Nothing is kept back from it, because the reserve already applies to the limits. CPU is not checked this way, since more work than cores only slows things down.
 
@@ -213,7 +213,7 @@ So small jobs fill the gaps while a large job waits, and the large job is not st
 
 Projected start and finish times assume every job takes its `--est`.
 
-The reservation, backfill and projections use the limits alone. They do not foresee other programs. The free memory check only ever delays a start. A job held for free memory counts as the first blocked job. A later job may go ahead of it only if it leaves room for it within the limits and fits the free memory. So smaller jobs can still pass a large job that waits on other programs. Stopping the whole queue behind it could leave the machine idle for as long as another user holds the memory. Watch the status, and cancel a job that waits too long.
+The reservation, backfill and projections use the limits alone. They do not foresee other programs. The free memory check only ever delays a start. A job held for free memory counts as the first blocked job. A later job may go ahead of it only if it leaves room for it within the limits and fits the free memory. So later jobs can still pass a job that waits on other programs. Stopping the whole queue behind it could leave the machine idle for as long as another user holds the memory. Watch the status, and cancel a job that waits too long.
 
 ### Dependencies
 
