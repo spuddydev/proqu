@@ -458,3 +458,33 @@ def test_a_projected_job_reserves_until_its_hard_end_not_its_estimate():
 def test_projection_checks_backfill_against_the_time_of_the_replay_step():
     # At 20, s would end at 110 which is past 100, though 90 from now is not.
     assert long_hard_end_scenario(90) == {"a": (1, 0, 30), "big": (2, 30, 40), "s": (3, 40, 50)}
+
+
+# Smaller cases
+
+
+@pytest.mark.parametrize("pending_first", [False, True])
+def test_a_job_with_two_dependencies_waits_for_both(pending_first):
+    after = ["pend", "done"] if pending_first else ["done", "pend"]
+    queue = [q("pend", t=1), q("x", t=2, after=after)]
+    p = run(L8, [], queue, {"done": "succeeded"})
+    assert started(p) == ["pend"]
+    assert p.fail == []
+    both = {"done": "succeeded", "pend": "succeeded"}
+    assert started(run(L8, [], [q("x", after=after)], both)) == ["x"]
+
+
+def test_a_request_for_every_cpu_is_within_the_limits():
+    p = run(L8, [], [q("x", cpus=8)])
+    assert started(p) == ["x"]
+    assert p.fail == []
+
+
+def test_equal_scores_break_by_submit_time_before_id():
+    assert ids(order([q("a", t=2), q("b", t=1)], 0)) == ["b", "a"]
+    assert ids(order([q("a", t=120, bid=10), q("b", t=60)], 10)) == ["b", "a"]
+
+
+def test_projection_positions_count_a_job_that_will_fail():
+    queue = [q("bad", t=1, after=["zz"]), q("a", 2, t=2), q("b", 2, t=3)]
+    assert proj(L8, [], queue) == {"a": (2, 0, 60), "b": (3, 0, 60)}
