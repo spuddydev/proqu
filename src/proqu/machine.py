@@ -4,6 +4,8 @@ import contextlib
 import json
 import math
 import os
+import platform
+import re
 import shutil
 import subprocess
 import tempfile
@@ -268,6 +270,31 @@ def parse_gpus(text: str) -> tuple[GpuInfo, ...]:
             continue
         gpus.append(GpuInfo(index=int(fields[0]), uuid=fields[1], vram=int(fields[2]) * 1024**2))
     return tuple(gpus)
+
+
+def apple_gpus() -> tuple[GpuInfo, ...]:
+    """The GPU of Apple silicon as one slot, or none on any other Mac.
+
+    Its memory is the RAM, so vram is 0 and a job counts GPU memory in its RAM.
+    Intel Macs are offered no GPU, as nothing there could keep a job to its GPU.
+    """
+    if platform.machine() != "arm64":
+        return ()
+    try:
+        result = subprocess.run(
+            ["sysctl", "-n", "machdep.cpu.brand_string"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+        name = result.stdout
+    except (OSError, subprocess.SubprocessError):
+        name = ""
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
+    if not slug.startswith("apple"):
+        slug = f"apple-{slug}" if slug else "apple-gpu"
+    return (GpuInfo(index=0, uuid=slug, vram=0, vendor="apple"),)
 
 
 def free_vram() -> dict[int, int] | None:

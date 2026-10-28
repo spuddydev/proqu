@@ -418,7 +418,8 @@ def test_long_jobs_wait_for_their_share(queue, capsys):
     assert "expected to start in" in capsys.readouterr().out
     main(["config", "set", "long_job_share", "100"])
     tick.tick()
-    assert settle([second.id])[0].state == "succeeded"
+    done = settle([second.id])[0]
+    assert done.state == "succeeded", done.reason
     main(["cancel", first.id])
     settle([first.id])
 
@@ -556,3 +557,40 @@ def test_unread_gpu_memory_starts_no_hold_clock(queue, monkeypatch):
     monkeypatch.setattr(machine, "free_vram", lambda: None)
     submit("--gpus", "1", "--vram", "4G", command=("true",))
     assert Store().held_since() == {}
+
+
+APPLE = machine.Machine(ram=4 * G, cpu_ids=CPUS, gpus=(machine.GpuInfo(0, "apple-m2", 0, "apple"),))
+
+
+@pytest.mark.skipif(len(CPUS) < 2, reason="needs two CPUs")
+def test_a_gpu_that_uses_the_ram_runs_one_job_at_a_time(queue, monkeypatch):
+    monkeypatch.setattr(machine, "snapshot", lambda refresh=False: APPLE)
+    first = submit("--gpus", "1", command=("sleep", "30"))
+    assert Store().get(first.id).state in ("starting", "running")
+    second = submit("--gpus", "1", command=("true",))
+    plain = submit(command=("sleep", "30"))
+    assert Store().get(second.id).state == "queued"
+    assert Store().get(plain.id).state in ("starting", "running")
+    # supervisors detect the real machine, so what follows is left to the scheduler tests
+    for job in (second, plain, first):
+        main(["cancel", job.id])
+    settle([first.id, plain.id])
+
+
+def test_a_gpu_that_uses_the_ram_refuses_vram(queue, monkeypatch, capsys):
+    monkeypatch.setattr(machine, "snapshot", lambda refresh=False: APPLE)
+    request = ["submit", "--ram", "1G", "--cpus", "1", "--est", "2s", "--max", "30s"]
+    assert main([*request, "--gpus", "1", "--vram", "4G", "--", "true"]) == 2
+    assert "count the GPU memory the job needs in --ram" in capsys.readouterr().err
+    assert main([*request, "--gpus", "2", "--", "true"]) == 2
+    assert "use --gpus 1" in capsys.readouterr().err
+
+
+def test_limits_and_status_describe_a_gpu_that_uses_the_ram(queue, monkeypatch, capsys):
+    monkeypatch.setattr(machine, "snapshot", lambda refresh=False: APPLE)
+    monkeypatch.setattr(machine, "free_vram", lambda: None)
+    assert main(["limits"]) == 0
+    assert "GPU 0: apple-m2, which uses the RAM, so one job at a time" in capsys.readouterr().out
+    job = submit("--gpus", "1", command=("true",))
+    assert "1 GPU using the RAM" in capsys.readouterr().out
+    settle([job.id])

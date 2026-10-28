@@ -319,3 +319,17 @@ def test_snapshot_from_before_vendors_reads_as_nvidia(tmp_path, monkeypatch):
     old = {"ram": 1, "cpu_ids": [0], "gpus": [{"index": 0, "uuid": "GPU-a", "vram": 1}]}
     paths.machine_path().write_text(json.dumps(old))
     assert machine.cached().gpus == (machine.GpuInfo(0, "GPU-a", 1, "nvidia"),)
+
+
+def test_apple_silicon_offers_one_gpu_that_uses_the_ram(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "sysctl").write_text("#!/bin/sh\necho 'Apple M2 Max'\n")
+    (bin_dir / "sysctl").chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setattr(machine.platform, "machine", lambda: "arm64")
+    assert machine.apple_gpus() == (machine.GpuInfo(0, "apple-m2-max", 0, "apple"),)
+    (bin_dir / "sysctl").write_text("#!/bin/sh\nexit 1\n")
+    assert machine.apple_gpus() == (machine.GpuInfo(0, "apple-gpu", 0, "apple"),)
+    monkeypatch.setattr(machine.platform, "machine", lambda: "x86_64")
+    assert machine.apple_gpus() == ()

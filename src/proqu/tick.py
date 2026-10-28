@@ -16,6 +16,9 @@ from proqu.store import Job, Store
 from proqu.units import format_size
 
 LOST = "its supervisor was lost (machine restart or crash), resubmit it"
+# a GPU that uses the RAM, as on Apple silicon, has vram 0. The scheduler sees it
+# as one slot: it holds one unit of GPU memory, and each job on it takes that unit
+SLOT = 1
 
 
 def tick(store: Store | None = None, cached_only: bool = False) -> dict[str, str]:
@@ -104,7 +107,11 @@ def free_memory(active: list[Job], seen: machine.Machine, gpus: bool) -> schedul
         for job in holding:
             used = sum(limits.memory_of(pid) for pid in members[job.id])
             ram -= max(0, job.ram - used)
-    vram = machine.free_vram() if gpus else None
+    if any(gpu.vram == 0 for gpu in seen.gpus):
+        # its memory is the RAM, checked above, so only the slot itself is free or not
+        vram = {gpu.index: SLOT for gpu in seen.gpus}
+    else:
+        vram = machine.free_vram() if gpus else None
     if vram is not None:
         on_gpus = [job for job in holding if job.gpu_ids]
         # without the list of GPU processes every job counts as using none
@@ -114,7 +121,7 @@ def free_memory(active: list[Job], seen: machine.Machine, gpus: bool) -> schedul
             mine = set(members[job.id])
             for index in job.gpu_ids:
                 used = sum(m or 0 for pid, u, m in apps if pid in mine and u == uuids.get(index))
-                vram[index] = vram.get(index, 0) - max(0, job.vram - used)
+                vram[index] = vram.get(index, 0) - max(0, request(job).vram - used)
     return scheduler.Free(ram, vram)
 
 
@@ -136,12 +143,14 @@ def reserve_reason(
 
 
 def to_limits(limits: machine.Machine) -> scheduler.Limits:
-    gpus = tuple(scheduler.Gpu(gpu.index, gpu.uuid, gpu.vram) for gpu in limits.gpus)
+    gpus = tuple(scheduler.Gpu(gpu.index, gpu.uuid, gpu.vram or SLOT) for gpu in limits.gpus)
     return scheduler.Limits(ram=limits.ram, cpu_ids=limits.cpu_ids, gpus=gpus)
 
 
 def request(job: Job) -> scheduler.Request:
-    return scheduler.Request(ram=job.ram, cpus=job.cpus, gpus=job.gpus, vram=job.vram)
+    # only a GPU that uses the RAM is asked for with no GPU memory
+    vram = job.vram or (SLOT if job.gpus else 0)
+    return scheduler.Request(ram=job.ram, cpus=job.cpus, gpus=job.gpus, vram=vram)
 
 
 def to_running(job: Job, now: float) -> scheduler.Running:
