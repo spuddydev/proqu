@@ -444,6 +444,16 @@ def test_passes_inside_a_job_never_read_free_memory(queue, monkeypatch):
     submit(command=("true",))
 
 
+def test_gpu_memory_is_checked_when_free_ram_cannot_be_read(queue, monkeypatch):
+    gpu = machine.Machine(ram=4 * G, cpu_ids=CPUS, gpus=(machine.GpuInfo(0, "GPU-a", 8 * G),))
+    monkeypatch.setattr(machine, "snapshot", lambda refresh=False: gpu)
+    monkeypatch.setattr(machine, "free_ram", lambda: None)
+    monkeypatch.setattr(machine, "free_vram", lambda: {0: 0})
+    job = submit("--gpus", "1", "--vram", "1G", command=("true",))
+    assert tick.tick() == {job.id: "gpu"}
+    assert Store().get(job.id).state == "queued"
+
+
 def test_hook_passes_never_start_gpu_jobs(queue, monkeypatch):
     gpu = machine.Machine(ram=4 * G, cpu_ids=CPUS, gpus=(machine.GpuInfo(0, "GPU-a", 8 * G),))
     monkeypatch.setattr(machine, "snapshot", lambda refresh=False: gpu)

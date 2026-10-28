@@ -8,6 +8,7 @@ next proqu command.
 
 import os
 import signal
+import sys
 import time
 
 from proqu import config, limits, machine, paths, procs, runner, scheduler
@@ -60,9 +61,7 @@ def tick(store: Store | None = None, cached_only: bool = False) -> dict[str, str
         if may_start and plan.start:
             starting = {start.id for start in plan.start}
             gpus = not cached_only and any(j.gpus for j in active if j.id in starting)
-            free = free_memory(active, seen, gpus)
-            if free is not None:
-                plan = scheduler.plan(*inputs, free=free)
+            plan = scheduler.plan(*inputs, free=free_memory(active, seen, gpus))
         for fail in plan.fail:
             job = next(j for j in active if j.id == fail.id)
             reason = reserve_reason(request(job), fail.reason, allowed, unreserved)
@@ -73,23 +72,24 @@ def tick(store: Store | None = None, cached_only: bool = False) -> dict[str, str
         return plan.held
 
 
-def free_memory(active: list[Job], seen: machine.Machine, gpus: bool) -> scheduler.Free | None:
+def free_memory(active: list[Job], seen: machine.Machine, gpus: bool) -> scheduler.Free:
     """The memory new jobs could use now: what is free, less what running jobs may still use.
 
     A running job may grow up to its request, so the part of its request it does
     not use yet is kept for it. A job that is starting, or whose use cannot be
     measured, keeps its whole request, which errs toward starting nothing. GPU
     memory is read only when gpus is set, otherwise it is unknown and no GPU job
-    starts. None when the free RAM cannot be read, and then the limits alone decide.
+    starts. When the free RAM cannot be read, the limits alone decide on RAM.
     """
     ram = machine.free_ram()
-    if ram is None:
-        return None
     holding = [job for job in active if job.state != "queued"]
     members = procs.members_of({job.id: job.job_pid for job in holding})
-    for job in holding:
-        used = sum(limits.memory_of(pid) for pid in members[job.id])
-        ram -= max(0, job.ram - used)
+    if ram is None:
+        ram = sys.maxsize
+    else:
+        for job in holding:
+            used = sum(limits.memory_of(pid) for pid in members[job.id])
+            ram -= max(0, job.ram - used)
     vram = machine.free_vram() if gpus else None
     if vram is not None:
         on_gpus = [job for job in holding if job.gpu_ids]
