@@ -17,6 +17,8 @@ DEFAULTS = {
     "aging_per_minute": 10.0,
     "kill_grace": 10,
     "length_delay_cap": 4 * 3600,
+    "long_job_after": 12 * 3600,
+    "long_job_share": 75,
 }
 
 # What an unset reserve means, as shown by `proqu config show`.
@@ -35,6 +37,8 @@ DESCRIPTIONS = {
     "bid_budget": "bid points each session may spend",
     "aging_per_minute": "priority points every queued job gains per minute",
     "length_delay_cap": "most a long job is delayed in the queue order, 0 for no delay",
+    "long_job_after": "max runtime past which a job counts as long for long_job_share",
+    "long_job_share": "percent of RAM, cores and GPU memory long jobs may hold together",
     "kill_grace": "time between the polite and the forced kill, for example 10s",
 }
 
@@ -45,6 +49,8 @@ class Settings:
     aging_per_minute: float
     kill_grace: int
     length_delay_cap: float
+    long_job_after: float
+    long_job_share: int
 
 
 def load(path: Path, validate: bool = True) -> dict:
@@ -74,6 +80,8 @@ def _valid(key: str, value) -> bool:
         return whole and value >= 1
     if key in ("bid_budget", "reserve_ram", "reserve_cpus"):
         return whole and value >= 0
+    if key == "long_job_share":
+        return whole and 1 <= value <= 100
     if key == "gpus":
         return isinstance(value, list) and all(
             isinstance(i, int) and not isinstance(i, bool) for i in value
@@ -81,7 +89,9 @@ def _valid(key: str, value) -> bool:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
     try:
-        return math.isfinite(value) and value >= 0
+        # set refuses a zero long_job_after, as it would make every job long
+        least = value > 0 if key == "long_job_after" else value >= 0
+        return math.isfinite(value) and least
     except OverflowError:
         return False
 
@@ -180,6 +190,11 @@ def _parse(key: str, text: str, machine: Machine):
         return value
     if key == "length_delay_cap":
         return 0 if _is_zero(text, "smhd") else parse_duration(text)
+    if key == "long_job_share":
+        value = _int(key, text.strip().removesuffix("%"))
+        if not 1 <= value <= 100:
+            raise ValueError("long_job_share must be a percent from 1 to 100")
+        return value
     if text.strip() == "0":
         raise ValueError(f"{key} must be more than zero")
     return parse_duration(text)
@@ -227,8 +242,10 @@ def describe(key: str, value) -> str:
     """A config value as a person would write it."""
     if key in ("ram", "vram", "reserve_ram"):
         return format_size(value)
-    if key in ("kill_grace", "length_delay_cap"):
+    if key in ("kill_grace", "length_delay_cap", "long_job_after"):
         return format_duration(value)
+    if key == "long_job_share":
+        return f"{value}%"
     if key == "gpus":
         return ",".join(map(str, value)) or "none"
     return str(value)

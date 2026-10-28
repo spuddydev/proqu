@@ -55,13 +55,14 @@ def tick(store: Store | None = None, cached_only: bool = False) -> dict[str, str
             settings.aging_per_minute,
             settings.length_delay_cap,
         )
-        plan = scheduler.plan(*inputs)
+        share = share_of(settings)
+        plan = scheduler.plan(*inputs, share=share)
         # the free memory is read only when a job is about to start, and read
         # afresh each time, so a pass never starts a job on an old reading
         if may_start and plan.start:
             starting = {start.id for start in plan.start}
             gpus = not cached_only and any(j.gpus for j in active if j.id in starting)
-            plan = scheduler.plan(*inputs, free=free_memory(active, seen, gpus))
+            plan = scheduler.plan(*inputs, free=free_memory(active, seen, gpus), share=share)
         for fail in plan.fail:
             job = next(j for j in active if j.id == fail.id)
             reason = reserve_reason(request(job), fail.reason, allowed, unreserved)
@@ -70,6 +71,11 @@ def tick(store: Store | None = None, cached_only: bool = False) -> dict[str, str
             for start in plan.start:
                 begin(store, start)
         return plan.held
+
+
+def share_of(settings: config.Settings) -> scheduler.Share:
+    """The share long jobs may hold, from the settings."""
+    return scheduler.Share(settings.long_job_after, settings.long_job_share)
 
 
 def free_memory(active: list[Job], seen: machine.Machine, gpus: bool) -> scheduler.Free:

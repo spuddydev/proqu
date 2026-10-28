@@ -357,7 +357,7 @@ def test_a_cached_only_pass_never_detects_the_machine(queue, monkeypatch):
 def test_a_pass_hands_the_length_delay_cap_to_the_scheduler(queue, monkeypatch):
     seen = []
 
-    def spy(*args):
+    def spy(*args, **kwargs):
         seen.append(args[5:])
         return scheduler.Plan([], [])
 
@@ -392,6 +392,35 @@ def test_a_queued_job_failed_by_a_config_limit_keeps_the_old_wording(queue, monk
 
 
 # Free memory
+
+
+def test_a_pass_hands_the_long_job_share_to_the_scheduler(queue, monkeypatch):
+    seen = []
+
+    def spy(*args, **kwargs):
+        seen.append(kwargs.get("share"))
+        return scheduler.Plan([], [])
+
+    monkeypatch.setattr(scheduler, "plan", spy)
+    main(["config", "set", "long_job_share", "50"])
+    main(["config", "set", "long_job_after", "2h"])
+    tick.tick()
+    assert seen == [scheduler.Share(2 * 3600, 50)]
+
+
+def test_long_jobs_wait_for_their_share(queue, capsys):
+    # two cores, so long jobs together may hold one of them
+    first = submit("--max", "13h", command=("sleep", "30"))
+    second = submit("--max", "13h", command=("true",))
+    assert Store().get(second.id).state == "queued"
+    capsys.readouterr()
+    main(["status", second.id])
+    assert "expected to start in" in capsys.readouterr().out
+    main(["config", "set", "long_job_share", "100"])
+    tick.tick()
+    assert settle([second.id])[0].state == "succeeded"
+    main(["cancel", first.id])
+    settle([first.id])
 
 
 def test_job_waits_while_other_programs_use_the_memory(queue, monkeypatch):
