@@ -293,3 +293,16 @@ def test_logs_of_a_finished_job(queue, capsys):
     assert main(["logs", job.id]) == 0
     lines = capsys.readouterr().out.splitlines()
     assert (len(lines), lines[0]) == (200, "101")
+
+
+def test_wait_reports_a_job_killed_at_its_max_runtime(queue, quick, capsys):
+    request = ["submit", "--ram", "1G", "--cpus", "1", "--est", "1s", "--max", "1s"]
+    assert main([*request, "--", "sh", "-c", "echo started; sleep 30"]) == 0
+    job = max(Store().for_session("s1"), key=lambda job: job.submitted_at)
+    capsys.readouterr()
+    assert main(["wait", job.id]) == 1
+    out = capsys.readouterr().out
+    assert f"Job {job.id} killed after " in out
+    assert "still running at its max runtime of 1s" in out
+    assert "the job broke its own limit, not the queue's" in out
+    assert out.endswith("started\n")
