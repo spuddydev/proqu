@@ -11,7 +11,7 @@ import pytest
 from proqu import limits, procs, runner
 from proqu.store import Store
 
-from .test_runner import ended, log_of, starting_job
+from .test_runner import cancel_after, ended, log_of, starting_job
 
 M = 1024**2
 
@@ -302,3 +302,56 @@ def test_kernel_alone_kills_a_job_over_its_ram(cgroups, monkeypatch):
     assert done.state == "killed"
     assert done.reason.startswith("used more than its RAM limit of 200.0M")
     assert time.monotonic() - started < 20
+
+
+def test_max_runtime_stops_a_job_in_a_scope(cgroups):
+    job = starting_job(["sleep", "30"], max=1)
+    started = time.monotonic()
+    runner.supervise(job.id)
+    done = ended(job)
+    assert done.state == "killed"
+    assert done.reason.startswith("still running at its max runtime of 1s")
+    assert time.monotonic() - started < 10
+
+
+def test_cancel_stops_a_job_in_a_scope(cgroups):
+    job = starting_job(["sleep", "30"])
+    cancel_after(job, 0.3)
+    started = time.monotonic()
+    runner.supervise(job.id)
+    done = ended(job)
+    assert (done.state, done.reason) == ("cancelled", "cancelled by you")
+    assert time.monotonic() - started < 10
+
+
+def test_probe_result_expires(home, monkeypatch):
+    monkeypatch.setattr(limits, "cgroups_available", REAL_PROBE)
+    calls = []
+    monkeypatch.setattr(limits, "_probe", lambda: calls.append(1) or True)
+    now = time.time()
+    monkeypatch.setattr(limits.time, "time", lambda: now)
+    assert limits.cgroups_available()
+    monkeypatch.setattr(limits.time, "time", lambda: now + limits.PROBE_AGE - 1)
+    assert limits.cgroups_available()
+    assert calls == [1]
+    monkeypatch.setattr(limits.time, "time", lambda: now + limits.PROBE_AGE + 1)
+    assert limits.cgroups_available()
+    assert calls == [1, 1]
+
+
+def test_vram_is_summed_per_gpu_and_not_across_gpus(home):
+    job = starting_job(["true"], gpus=2, vram=1024**3, gpu_ids=[0, 1])
+    both = ("GPU-a", "GPU-b")
+    same_gpu = [(1, "GPU-a", 600 * M), (2, "GPU-a", 600 * M)]
+    assert limits.gpu_breach(job, both, same_gpu)[1].startswith("used 1.1G of GPU memory")
+    two_gpus = [(1, "GPU-a", 600 * M), (2, "GPU-b", 600 * M)]
+    assert limits.gpu_breach(job, both, two_gpus) is None
+
+
+def test_gpu_use_by_other_processes_is_ignored(home, tmp_path, monkeypatch):
+    # nvidia-smi reports this test process, which is not part of the job
+    fake_nvidia_smi(tmp_path, monkeypatch, "GPU-a, 500")
+    (tmp_path / "pid").write_text(str(os.getpid()))
+    job = starting_job(["sleep", "1.5"])
+    runner.supervise(job.id)
+    assert ended(job).state == "succeeded"
