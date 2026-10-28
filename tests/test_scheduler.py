@@ -513,7 +513,8 @@ def test_length_delay_stops_at_the_cap():
     # both are past the cap, so only the submit time separates them
     jobs = [q("first", t=0, mx=200 * H), q("second", t=60, mx=100 * H)]
     assert ids(order(jobs, 10, CAP)) == ["first", "second"]
-    # a cap of 5h would still separate them by nothing, one of 3h would not either
+    # a cap of 3h delays both by 3h, so the submit time decides, with no cap in reach
+    # the shorter job is delayed less and goes first
     below = [q("first", t=0, mx=100 * H), q("second", t=60, mx=30 * H)]
     assert ids(order(below, 10, 3 * H)) == ["first", "second"]
     assert ids(order(below, 10, 100 * H)) == ["second", "first"]
