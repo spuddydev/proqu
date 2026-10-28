@@ -230,3 +230,11 @@ def test_wait_never_sleeps_past_its_timeout(home, monkeypatch):
     monkeypatch.setattr(cli.time, "sleep", sleep)
     assert cli.wait_for(Store(), job.id, 0.2) == cli.TIMED_OUT
     assert sleeps and max(sleeps) <= 0.2
+
+
+def test_the_queued_line_is_printed_once(home, capsys):
+    submit("--cpus", "4")
+    second = submit("--cpus", "4")
+    capsys.readouterr()
+    assert cli.wait_for(Store(), second.id, 0.3) == cli.TIMED_OUT
+    assert capsys.readouterr().out.count("is queued, position") == 1
