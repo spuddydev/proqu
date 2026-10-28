@@ -82,16 +82,28 @@ Why reorder rather than refuse long jobs:
 
 Trade-offs:
 
-- The delay only changes who starts first. Once a long job runs it holds its share until it ends or reaches its `--max`.
+- The delay only changes who starts first. Once a long job runs it holds its share until it ends or reaches its `--max`. The share cap below limits how much long jobs may hold together.
 - A job's `--max` is the agent's own figure. An agent that overstates it only delays itself.
 - A tenth is a rule of thumb, not a measured fit. It is not tuned to any one workload.
 - It is counted in aging, so with `aging_per_minute` at 0 it does nothing.
 
-### Not done yet: a cap on the share long jobs may hold
+### A cap on the share long jobs may hold
 
-A few long jobs can fill the machine for days, and short jobs then wait the whole time whatever their priority. The delay does not help once a long job is running. A cap would limit how much of RAM, cores and GPUs jobs with a long `--max` may hold together.
+A few long jobs can fill the machine for days, and short jobs then wait the whole time whatever their priority. The delay does nothing once a long job is running.
 
-It is deferred. What counts as long, how big the share is and whether it is a config key are not decided. It is tracked in issue #7.
+So a job whose `--max` is over `long_job_after` (12 hours by default) is long, and long jobs together may hold at most `long_job_share` of the queue's RAM, of its cores and of each GPU's memory. The default is 75%. Each cap is the limit, after the reserve and config, times the percent, rounded down. `100` turns the cap off. Short jobs are not affected.
+
+A single long job larger than the share still runs, but only when no other long job is running. While it runs, no other long job starts. Otherwise it could never run. The share is part of the scheduling model, so a long job blocked by it is reserved for when a long job ends, and backfill and projections account for it. Changing `long_job_after` reclassifies running jobs at the next pass. It does not stop anything.
+
+Trade-offs:
+
+- Some of the machine can sit idle while long jobs wait and no short jobs come.
+- A larger long job runs alone among long jobs.
+- With few cores the core cap is small. Two cores at 75% gives 1, so long jobs run one at a time.
+- The threshold and the share are rules of thumb, not measured fits.
+- GPU memory is capped per GPU, not the number of GPUs.
+- An agent that understates `--max` to avoid the share is killed at it.
+- It is unrelated to `length_delay_cap`, which only reorders. The share limits what long jobs hold once running.
 
 ## Free memory at start
 
