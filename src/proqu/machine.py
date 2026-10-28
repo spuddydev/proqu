@@ -117,6 +117,20 @@ def detect_ram(proc: Path = Path("/proc"), cgroup_root: Path = Path("/sys/fs/cgr
     return min(total, limit) if limit else total
 
 
+def free_ram(proc: Path = Path("/proc")) -> int | None:
+    """Memory the kernel could give new work now, MemAvailable, or None if it cannot be read.
+
+    Read fresh on every call, never cached, as it changes from moment to moment.
+    """
+    try:
+        for line in (proc / "meminfo").read_text().splitlines():
+            if line.startswith("MemAvailable:"):
+                return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    return None
+
+
 def _cgroup_memory_limit(proc: Path, cgroup_root: Path) -> int | None:
     """The tightest memory limit on this process's cgroup or its ancestors."""
     limits = []
@@ -242,3 +256,30 @@ def parse_gpus(text: str) -> tuple[GpuInfo, ...]:
             continue
         gpus.append(GpuInfo(index=int(fields[0]), uuid=fields[1], vram=int(fields[2]) * 1024**2))
     return tuple(gpus)
+
+
+def free_vram() -> dict[int, int] | None:
+    """Free memory on each NVIDIA GPU by index, or None when it cannot be read."""
+    if not shutil.which("nvidia-smi"):
+        return None
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=index,memory.free", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_free_vram(result.stdout)
+
+
+def parse_free_vram(text: str) -> dict[int, int]:
+    """Parse nvidia-smi rows of index and free MiB, skipping unreadable ones."""
+    free = {}
+    for line in text.splitlines():
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) == 2 and fields[0].isdigit() and fields[1].isdigit():
+            free[int(fields[0])] = int(fields[1]) * 1024**2
+    return free

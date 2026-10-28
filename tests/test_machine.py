@@ -284,3 +284,30 @@ def test_unwritable_snapshot_is_not_an_error(tmp_path, monkeypatch):
     monkeypatch.setattr(machine.tempfile, "mkstemp", refuse)
     assert machine.snapshot() == machine.detect()
     assert not (state / "machine.json").exists()
+
+
+def test_free_ram_reads_mem_available(tmp_path):
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    (proc / "meminfo").write_text("MemTotal: 64 kB\nMemFree: 1 kB\nMemAvailable: 8 kB\n")
+    assert machine.free_ram(proc) == 8 * 1024
+
+
+def test_free_ram_unreadable_is_none(tmp_path):
+    proc = tmp_path / "proc"
+    proc.mkdir()
+    (proc / "meminfo").write_text("MemTotal: 64 kB\n")
+    assert machine.free_ram(proc) is None
+    assert machine.free_ram(tmp_path / "missing") is None
+
+
+def test_free_vram_from_nvidia_smi(tmp_path, monkeypatch):
+    fake_nvidia_smi(tmp_path, monkeypatch, "echo '0, 1024'; echo '1, [N/A]'; echo '2, 2048'")
+    assert machine.free_vram() == {0: 1024**3, 2: 2 * 1024**3}
+
+
+def test_free_vram_when_nvidia_smi_fails_or_is_missing(tmp_path, monkeypatch):
+    fake_nvidia_smi(tmp_path, monkeypatch, "exit 9")
+    assert machine.free_vram() is None
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    assert machine.free_vram() is None
