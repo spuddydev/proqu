@@ -97,7 +97,7 @@ def test_fast_job_in_a_scope_runs_once(cgroups, tmp_path):
     assert counter.read_text() == "x\n"
 
 
-def test_failing_systemd_run_falls_back_to_watching(home, monkeypatch, tmp_path):
+def test_failing_systemd_run_falls_back_to_watching(home, monkeypatch, tmp_path, capsys):
     fake = tmp_path / "bin"
     fake.mkdir()
     (fake / "systemd-run").write_text("#!/bin/sh\necho no bus >&2\nexit 1\n")
@@ -112,6 +112,7 @@ def test_failing_systemd_run_falls_back_to_watching(home, monkeypatch, tmp_path)
     assert ended(job).state == "succeeded"
     assert counter.read_text() == "x\n"
     assert forgotten == [1]
+    assert "systemd-run did not start the job in a cgroup" in capsys.readouterr().out
 
 
 def test_probe_result_is_cached(home, monkeypatch):

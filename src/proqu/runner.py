@@ -167,6 +167,11 @@ def start(job: Job, log) -> tuple[subprocess.Popen, limits.Monitor]:
             # it ran, so running it again could repeat what it already did
             raise OSError("its cgroup was too slow to start, the job was stopped, resubmit it")
         limits.mark_unavailable()
+        print(
+            "proqu: systemd-run did not start the job in a cgroup, "
+            "running it without one and watching its RAM instead",
+            flush=True,
+        )
     proc = launch(job, log, job.argv)
     return proc, limits.Monitor(job, proc.pid, uuids)
 
