@@ -242,6 +242,19 @@ def test_cpus_over_the_reserve_name_the_reserve(home, capsys):
     assert "reserve_cpus" in err
 
 
+def test_reserve_refusal_names_the_machine_not_a_lowered_figure(home, capsys):
+    reserve_on()
+    main(["config", "set", "ram", "15G"])
+    main(["config", "set", "cpus", "3"])
+    capsys.readouterr()
+    assert submit("--ram", "14.7G") == 2
+    assert "The machine has 16.0G" in capsys.readouterr().err
+    main(["config", "set", "reserve_cpus", "2"])
+    capsys.readouterr()
+    assert submit("--cpus", "3") == 2
+    assert "The machine has 4 but" in capsys.readouterr().err
+
+
 def test_request_over_the_machine_does_not_blame_the_reserve(home, capsys):
     reserve_on()
     capsys.readouterr()

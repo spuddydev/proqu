@@ -87,7 +87,7 @@ def cmd_submit(args, command: list[str]) -> int:
     detected, current = machine.snapshot(), load_config()
     limits = config.effective_limits(detected, current)
     unreserved = config.effective_limits(detected, current, reserved=False)
-    check_request(limits, unreserved, ram, args.cpus, args.gpus, vram)
+    check_request(limits, unreserved, detected, ram, args.cpus, args.gpus, vram)
     if est > max_time:
         raise invalid(
             f"--est {format_duration(est)} is longer than --max {format_duration(max_time)}: "
@@ -187,12 +187,16 @@ def check_name(name: str | None) -> None:
 def check_request(
     limits: machine.Machine,
     unreserved: machine.Machine,
+    detected: machine.Machine,
     ram: int,
     cpus: int,
     gpus: int,
     vram: int,
 ) -> None:
-    """Refuse a request over the queue limits. unreserved is the same without the reserve."""
+    """Refuse a request over the queue limits.
+
+    unreserved is the same without the reserve, detected is the machine itself.
+    """
     if ram > limits.ram:
         message = (
             f"--ram {format_size(ram)} is more than the queue allows ({format_size(limits.ram)}): "
@@ -200,7 +204,7 @@ def check_request(
         )
         if ram <= unreserved.ram:
             message += (
-                f". The machine has {format_size(unreserved.ram)} but the rest is kept in "
+                f". The machine has {format_size(detected.ram)} but the rest is kept in "
                 "reserve for services and interactive work. Only the machine's owner should "
                 "change that, with `proqu config set reserve_ram`"
             )
@@ -211,7 +215,7 @@ def check_request(
         )
         if len(limits.cpu_ids) < cpus <= len(unreserved.cpu_ids):
             message += (
-                f". The machine has {len(unreserved.cpu_ids)} but the rest are kept in reserve "
+                f". The machine has {len(detected.cpu_ids)} but the rest are kept in reserve "
                 "for services and interactive work. Only the machine's owner should change "
                 "that, with `proqu config set reserve_cpus`"
             )
