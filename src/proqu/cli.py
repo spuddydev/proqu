@@ -719,8 +719,9 @@ def build_parser() -> argparse.ArgumentParser:
             "Wait for a job to end, then report how it ended, what to do next and the end of "
             "its log. Run it as a background command so you are woken when the job ends. "
             "Exit codes: 0 the job succeeded, 1 it ended any other way, 3 --timeout ran out, "
-            "4 the job is still queued but the queue config is broken, 130 or 143 the wait was "
-            "interrupted. For 3, 4, 130 and 143 the job has not ended, so wait again."
+            "4 the job is still queued but the queue config is broken, 129, 130 or 143 the wait "
+            "was stopped by a signal, 141 its output was closed. For 3, 4, 129, 130, 141 and 143 "
+            "the job may not have ended, so wait again."
         ),
     )
     wait.add_argument("id", help="the job id from submit or status")
