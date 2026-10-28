@@ -1,8 +1,9 @@
 """One scheduling pass: recover lost jobs, fail doomed ones, start what fits.
 
-There is no resident server. A pass runs at the start of every command that
-reads or changes jobs, and whenever a supervisor finishes, so the queue moves
-whenever anything happens.
+There is no resident server. A pass runs in every command that reads or
+changes jobs, and whenever a supervisor finishes, so the queue moves whenever
+anything happens. Recovery after a crash or restart therefore happens at the
+next proqu command.
 """
 
 import os
@@ -20,16 +21,17 @@ def tick(store: Store | None = None) -> None:
     try:
         current = config.load(paths.config_path())
     except ValueError:
-        # the commands report a broken config, the queue just waits for a fix
+        # submit, status and limits report a broken config, the queue waits for a fix
         return
     limits = to_limits(config.effective_limits(machine.snapshot(), current))
     aging = config.settings(current).aging_per_minute
-    # a supervisor started from inside a job would live in that job's cgroup
-    # and die with it, so passes inside jobs leave starting to the next one
+    # a supervisor started from inside a job would share that job's cgroup when
+    # cgroups enforce limits, and die with it, so passes inside jobs leave
+    # starting to the next pass outside one
     may_start = not os.environ.get("PROQU_JOB_ID")
     with store.locked():
         now = time.time()
-        lost = reap(store, now)
+        reap(store, now)
         active = store.active()
         plan = scheduler.plan(
             limits,
@@ -44,7 +46,6 @@ def tick(store: Store | None = None) -> None:
         if may_start:
             for start in plan.start:
                 begin(store, start)
-    kill_leftovers(lost)
 
 
 def to_limits(limits: machine.Machine) -> scheduler.Limits:
@@ -109,7 +110,7 @@ def begin(store: Store, start: scheduler.Start) -> None:
         return
     try:
         pid, ticks = runner.spawn_supervisor(start.id)
-    except OSError as error:
+    except (OSError, ValueError) as error:
         store.transition(
             start.id,
             ("starting",),
@@ -124,7 +125,11 @@ def begin(store: Store, start: scheduler.Start) -> None:
 
 
 def reap(store: Store, now: float) -> list[str]:
-    """End jobs whose supervisor is gone, returning their ids."""
+    """End jobs whose supervisor is gone, returning their ids. Call inside locked().
+
+    Leftover processes are killed before the job's end is recorded, so if this
+    pass is interrupted the job stays active and the next pass tries again.
+    """
     rebooted = _rebooted()
     lost = []
     for job in store.active():
@@ -136,11 +141,12 @@ def reap(store: Store, now: float) -> list[str]:
             state, reason = "cancelled", runner.CANCELLED
         else:
             state, reason = "failed", LOST
+        if not rebooted:
+            kill_leftovers([job.id])
         if store.transition(job.id, ("starting", "running"), state, reason=reason, ended_at=now):
             if job.state == "starting" and job.bid:
                 store.add_bid_spent(job.session, -job.bid)
-            if not rebooted:
-                lost.append(job.id)
+            lost.append(job.id)
     return lost
 
 
