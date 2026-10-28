@@ -119,6 +119,8 @@ GPU use is checked by running `nvidia-smi` every 5 seconds, because it is too sl
 
 A job's output goes to a log file with no size cap. A job that prints without end fills the disk. The database keeps every job forever, and so do the logs. `proqu status` hides all but the last 10 finished jobs, but nothing is deleted. The owner can remove old files by hand from the state directory.
 
+Each job's whole environment, captured at submit, is stored in the database too. So secrets in the environment stay on disk for as long as the database does. The state directory is private, mode 0700, which limits who can read them.
+
 ## Sessions
 
 A session is the unit of visibility, bidding and notification.
