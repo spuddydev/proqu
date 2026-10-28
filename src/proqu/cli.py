@@ -607,7 +607,8 @@ def cmd_limits(args, command: list[str]) -> int:
     )
     print(f"Each session may bid up to {settings.bid_budget} points in total.")
     print(f"Every queued job gains {settings.aging_per_minute:g} priority points per minute.")
-    if settings.length_delay_cap:
+    # the delay is counted in aging, so without aging it changes nothing
+    if settings.length_delay_cap and settings.aging_per_minute:
         print(
             "A long job counts as submitted later by a tenth of its --max, at most "
             f"{format_duration(settings.length_delay_cap)}, so shorter jobs tend to go first."

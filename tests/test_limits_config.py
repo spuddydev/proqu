@@ -192,6 +192,13 @@ def test_limits_leave_out_the_length_delay_when_off(home, capsys):
     assert "tenth of its --max" not in capsys.readouterr().out
 
 
+def test_limits_leave_out_the_length_delay_when_aging_is_off(home, capsys):
+    main(["config", "set", "aging_per_minute", "0"])
+    capsys.readouterr()
+    main(["limits"])
+    assert "tenth of its --max" not in capsys.readouterr().out
+
+
 def test_config_show_the_length_delay(home, capsys):
     main(["config", "show"])
     assert "length_delay_cap = 4h" in capsys.readouterr().out
