@@ -39,7 +39,7 @@ A multi-day training run is a normal queue job. Give it an honest `--max`, and e
 
 Every request has to be right, because the queue plans around it and enforces it.
 
-- `--ram`: peak resident memory of the whole job, children included. Measure it on a small run with `/usr/bin/time -v CMD` (Maximum resident set size) or by watching it, then scale up. A little over is safer than being killed, but large overestimates keep others waiting.
+- `--ram`: peak resident memory of the whole job, children included. Measure it on a small run with `/usr/bin/time -v CMD` (Maximum resident set size), `/usr/bin/time -l CMD` on macOS, or by watching it, then scale up. A little over is safer than being killed, but large overestimates keep others waiting.
 - `--cpus`: cores the job will really keep busy, for example the `-j` of a build or the worker count of a data loader. Not the core count of the machine. On macOS this is not enforced, so run the job with that many threads.
 - `--gpus` and `--vram`: number of GPUs and memory needed on each, as `nvidia-smi` reports it during a short run. Give both together, the CLI rejects one without the other. A job that asked for no GPU is killed if it touches one, so set these whenever the code may use CUDA or ROCm. On AMD, measure with `amd-smi` and read `ROCR_VISIBLE_DEVICES` to see the GPUs the job was given. On an Apple silicon Mac the GPU shares the RAM, so ask for it with `--gpus 1` and no `--vram`, and count its memory in `--ram`. Only one job holds it at a time.
 - `--est`: your honest expected runtime. The queue uses it to plan and to show projected start times.
