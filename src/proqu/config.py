@@ -30,9 +30,14 @@ class Settings:
 
 def load(path: Path) -> dict:
     try:
-        return json.loads(path.read_text())
+        config = json.loads(path.read_text())
     except FileNotFoundError:
         return {}
+    except ValueError:
+        config = None
+    if not isinstance(config, dict):
+        raise ValueError(f"config file {path} is not valid JSON, fix or delete it")
+    return config
 
 
 def save(path: Path, config: dict) -> None:

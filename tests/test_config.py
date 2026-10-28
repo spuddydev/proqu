@@ -85,3 +85,26 @@ def test_state_dir_follows_xdg(tmp_path, monkeypatch):
     monkeypatch.delenv("PROQU_HOME", raising=False)
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
     assert paths.state_dir() == tmp_path / "proqu"
+
+
+def test_corrupt_config_names_the_file(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text("{not json")
+    with pytest.raises(ValueError, match=r"config\.json is not valid JSON"):
+        config.load(path)
+
+
+def test_existing_open_state_dir_is_made_private(tmp_path, monkeypatch):
+    state = tmp_path / "state"
+    state.mkdir(mode=0o755)
+    state.chmod(0o755)
+    monkeypatch.setenv("PROQU_HOME", str(state))
+    paths.state_dir()
+    assert state.stat().st_mode & 0o777 == 0o700
+
+
+def test_relative_xdg_is_ignored(tmp_path, monkeypatch):
+    monkeypatch.delenv("PROQU_HOME", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", "relative/dir")
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert paths.state_dir() == tmp_path / ".local" / "state" / "proqu"
