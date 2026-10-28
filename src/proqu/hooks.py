@@ -130,7 +130,7 @@ def _open_store() -> Store | None:
     store.conn.execute(f"PRAGMA busy_timeout = {int(LOCK_TIMEOUT * 1000)}")
     # with no daemon, each hook is also a chance to move the queue on
     with contextlib.suppress(Exception):
-        tick.tick(store)
+        tick.tick(store, cached_only=True)
     return store
 
 

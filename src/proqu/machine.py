@@ -57,6 +57,11 @@ def snapshot(refresh: bool = False) -> Machine:
     return machine
 
 
+def cached() -> Machine | None:
+    """The cached snapshot of any age, or None. Never detects, so it is always quick."""
+    return _load(paths.machine_path())
+
+
 def _age(path: Path) -> float:
     try:
         return time.time() - path.stat().st_mtime

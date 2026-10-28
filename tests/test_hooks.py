@@ -241,16 +241,20 @@ def test_hooks_move_the_queue_on(home, monkeypatch, capsys, event):
     from proqu import tick
 
     passes = []
-    monkeypatch.setattr(tick, "tick", lambda store=None: passes.append(store))
+
+    def record(store=None, cached_only=False):
+        passes.append(cached_only)
+
+    monkeypatch.setattr(tick, "tick", record)
     add()
     hook(event, {"session_id": SESSION}, capsys)
-    assert len(passes) == 1
+    assert passes == [True]
 
 
 def test_a_failing_pass_does_not_break_the_hook(home, monkeypatch, capsys):
     from proqu import tick
 
-    def broken(store=None):
+    def broken(store=None, cached_only=False):
         raise RuntimeError("pass failed")
 
     monkeypatch.setattr(tick, "tick", broken)

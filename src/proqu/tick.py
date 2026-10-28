@@ -16,14 +16,19 @@ from proqu.store import Job, Store
 LOST = "its supervisor was lost (machine restart or crash), resubmit it"
 
 
-def tick(store: Store | None = None) -> None:
+def tick(store: Store | None = None, cached_only: bool = False) -> None:
+    """Run one pass. With cached_only the machine is never detected, and a
+    pass with no cached snapshot is skipped, so the call stays quick."""
     store = store or Store()
     try:
         current = config.load(paths.config_path())
     except ValueError:
         # submit, status and limits report a broken config, the queue waits for a fix
         return
-    limits = to_limits(config.effective_limits(machine.snapshot(), current))
+    seen = machine.cached() if cached_only else machine.snapshot()
+    if seen is None:
+        return
+    limits = to_limits(config.effective_limits(seen, current))
     aging = config.settings(current).aging_per_minute
     # a supervisor started from inside a job would share that job's cgroup when
     # cgroups enforce limits, and die with it, so passes inside jobs leave
