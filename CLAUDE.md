@@ -13,7 +13,7 @@ A shared compute queue that lets coding agents submit heavy jobs and share a mac
 ### Shape
 
 - Shipped as a Claude Code plugin: a skill that explains when and how to use it, hooks for session identity and notifications, and the `proqu` CLI on the agent's PATH.
-- The CLI is Python standard library only, so installing the plugin is the whole install.
+- The CLI is Python standard library only. One install script fetches a release, links the command and installs the plugin.
 - No resident server. State is one SQLite file under a file lock. Every command runs a scheduling pass. Each running job has a short lived supervisor that enforces limits and runs a scheduling pass when the job ends.
 - One queue per user per machine.
 
@@ -65,6 +65,11 @@ uv run pytest                            test
 uv run ruff check --fix && uv run ruff format   lint and format
 uvx pre-commit install --install-hooks   hooks, once per clone
 ```
+
+## Releasing
+
+- Set the new version in `src/proqu/cli.py`, `pyproject.toml` and `.claude-plugin/plugin.json`, then run `uv lock`.
+- Once that is on main, tag main with `vX.Y.Z` and push the tag. The release workflow tests, checks the tag against the version and publishes the archive the installer downloads.
 
 ## Branches and merging
 
