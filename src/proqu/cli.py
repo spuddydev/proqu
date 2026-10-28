@@ -170,6 +170,11 @@ def cmd_submit(args, command: list[str]) -> int:
         delay = min(max_time / 10, settings.length_delay_cap) if settings.aging_per_minute else 0
         if delay > 0:
             print(f"Long max runtime: counts as submitted {format_duration(round(delay))} later.")
+        if max_time > settings.long_job_after and settings.long_job_share < 100:
+            print(
+                f"Long job: long jobs together may hold at most {settings.long_job_share}% of "
+                "RAM, cores and GPU memory, so it may wait for another long job to end."
+            )
         # the job is queued already, so a failed estimate must not fail the submit
         with contextlib.suppress(ProquError, OSError, sqlite3.Error):
             when = time.time()
@@ -637,6 +642,12 @@ def cmd_limits(args, command: list[str]) -> int:
         print(
             "A long job counts as submitted later by a tenth of its --max, at most "
             f"{format_duration(settings.length_delay_cap)}, so shorter jobs tend to go first."
+        )
+    if settings.long_job_share < 100:
+        print(
+            f"Jobs with a --max over {format_duration(settings.long_job_after)} are long. Long "
+            f"jobs together may hold at most {settings.long_job_share}% of RAM, cores and each "
+            "GPU's memory. A larger long job runs only when no other long job is running."
         )
     return 0
 
