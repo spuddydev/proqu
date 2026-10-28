@@ -238,3 +238,14 @@ def test_the_queued_line_is_printed_once(home, capsys):
     capsys.readouterr()
     assert cli.wait_for(Store(), second.id, 0.3) == cli.TIMED_OUT
     assert capsys.readouterr().out.count("is queued, position") == 1
+
+
+def test_waiting_again_on_a_notified_job_reports_it_again(home, capsys):
+    job = submit()
+    end(job.id, state="failed", reason="exited with code 2", started_at=time.time())
+    capsys.readouterr()
+    assert main(["wait", job.id]) == 1
+    first = capsys.readouterr().out
+    assert Store().get(job.id).notified
+    assert main(["wait", job.id]) == 1
+    assert capsys.readouterr().out == first
