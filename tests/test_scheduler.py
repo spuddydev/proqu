@@ -490,3 +490,68 @@ def test_equal_scores_break_by_submit_time_before_id():
 def test_projection_positions_count_a_job_that_will_fail():
     queue = [q("bad", t=1, after=["zz"]), q("a", 2, t=2), q("b", 2, t=3)]
     assert proj(L8, [], queue) == {"a": (2, 0, 60), "b": (3, 0, 60)}
+
+
+# Length delay
+
+H = 3600
+CAP = 4 * H
+
+
+def test_long_job_ranks_after_a_later_short_one_of_equal_bid():
+    jobs = [q("long", t=0, mx=10 * H), q("short", t=60, mx=600)]
+    assert ids(order(jobs, 10, CAP)) == ["short", "long"]
+    assert ids(order(jobs, 10)) == ["long", "short"]
+
+
+def test_length_delay_is_a_tenth_of_max_so_close_lengths_keep_fifo():
+    jobs = [q("a", t=0, mx=1000), q("b", t=20, mx=900)]
+    assert ids(order(jobs, 10, CAP)) == ["a", "b"]
+
+
+def test_length_delay_stops_at_the_cap():
+    # both are past the cap, so only the submit time separates them
+    jobs = [q("first", t=0, mx=200 * H), q("second", t=60, mx=100 * H)]
+    assert ids(order(jobs, 10, CAP)) == ["first", "second"]
+    # a cap of 3h delays both by 3h, so the submit time decides, with no cap in reach
+    # the shorter job is delayed less and goes first
+    below = [q("first", t=0, mx=100 * H), q("second", t=60, mx=30 * H)]
+    assert ids(order(below, 10, 3 * H)) == ["first", "second"]
+    assert ids(order(below, 10, 100 * H)) == ["second", "first"]
+
+
+def test_a_cap_of_zero_turns_the_delay_off():
+    jobs = [q("long", t=0, mx=10 * H), q("short", t=60, mx=600)]
+    assert ids(order(jobs, 10, 0)) == ["long", "short"]
+
+
+def test_a_bid_can_outweigh_the_length_delay():
+    jobs = [q("long", t=0, mx=10 * H, bid=5000), q("short", t=60, mx=600)]
+    assert ids(order(jobs, 10, CAP)) == ["long", "short"]
+
+
+def test_plan_uses_the_length_delay():
+    jobs = [q("long", ram=8, t=NOW - 600, mx=10 * H), q("short", ram=8, t=NOW - 60, mx=600)]
+    assert started(plan(L8, [], jobs, {}, NOW, 10, CAP)) == ["short"]
+    assert started(plan(L8, [], jobs, {}, NOW, 10, 0)) == ["long"]
+
+
+def test_project_uses_the_length_delay():
+    jobs = [q("long", ram=8, t=NOW - 600, mx=10 * H), q("short", ram=8, t=NOW - 60, mx=600)]
+    delayed = project(L8, [], jobs, {}, NOW, 10, CAP)
+    plain = project(L8, [], jobs, {}, NOW, 10, 0)
+    assert (delayed["short"].position, delayed["long"].position) == (1, 2)
+    assert delayed["short"].start == NOW
+    assert (plain["long"].position, plain["short"].position) == (1, 2)
+    assert plain["long"].start == NOW
+
+
+def test_project_keeps_the_length_delay_when_replaying_later_steps():
+    busy = [r("busy", ram=8, est=100, mx=200, cpu_ids=(0,))]
+    jobs = [
+        q("long", ram=8, t=NOW - 600, mx=10 * H, est=500),
+        q("short", ram=8, t=NOW - 60, mx=600),
+    ]
+    out = project(L8, busy, jobs, {}, NOW, 10, CAP)
+    assert out["short"].start == NOW + 100
+    assert out["long"].start == NOW + 100 + 60

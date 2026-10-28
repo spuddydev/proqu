@@ -53,8 +53,10 @@ def queue_outlook(store: Store, now: float) -> dict[str, report.Place]:
     """Positions and projections of queued jobs, from the limits a pass would use."""
     current = load_config()
     limits = ticking.to_limits(config.effective_limits(machine.snapshot(), current))
-    aging = config.settings(current).aging_per_minute
-    return report.outlook(store, current_session(), limits, aging, now)
+    settings = config.settings(current)
+    return report.outlook(
+        store, current_session(), limits, settings.aging_per_minute, settings.length_delay_cap, now
+    )
 
 
 def sentence(text: str) -> str:
@@ -82,8 +84,10 @@ def cmd_submit(args, command: list[str]) -> int:
     max_time = parse_flag("--max", args.max, parse_duration)
     check_name(args.name)
 
-    limits = config.effective_limits(machine.snapshot(), load_config())
-    check_request(limits, ram, args.cpus, args.gpus, vram)
+    detected, current = machine.snapshot(), load_config()
+    limits = config.effective_limits(detected, current)
+    unreserved = config.effective_limits(detected, current, reserved=False)
+    check_request(limits, unreserved, detected, ram, args.cpus, args.gpus, vram)
     if est > max_time:
         raise invalid(
             f"--est {format_duration(est)} is longer than --max {format_duration(max_time)}: "
@@ -150,6 +154,9 @@ def cmd_submit(args, command: list[str]) -> int:
     if after:
         print(f"Waits for: {', '.join(after)}.")
     if now.state == "queued":
+        delay = min(max_time / 10, settings.length_delay_cap) if settings.aging_per_minute else 0
+        if delay > 0:
+            print(f"Long max runtime: counts as submitted {format_duration(round(delay))} later.")
         # the job is queued already, so a failed estimate must not fail the submit
         with contextlib.suppress(ProquError, OSError, sqlite3.Error):
             when = time.time()
@@ -180,16 +187,42 @@ def check_name(name: str | None) -> None:
         raise invalid(f"--name must be 1 to {MAX_NAME} printable characters on one line")
 
 
-def check_request(limits: machine.Machine, ram: int, cpus: int, gpus: int, vram: int) -> None:
+def check_request(
+    limits: machine.Machine,
+    unreserved: machine.Machine,
+    detected: machine.Machine,
+    ram: int,
+    cpus: int,
+    gpus: int,
+    vram: int,
+) -> None:
+    """Refuse a request over the queue limits.
+
+    unreserved is the same without the reserve, detected is the machine itself.
+    """
     if ram > limits.ram:
-        raise invalid(
+        message = (
             f"--ram {format_size(ram)} is more than the queue allows ({format_size(limits.ram)}): "
             "lower it or split the work"
         )
+        if ram <= unreserved.ram:
+            message += (
+                f". The machine has {format_size(detected.ram)} but the rest is kept in "
+                "reserve for services and interactive work. Only the machine's owner should "
+                "change that, with `proqu config set reserve_ram`"
+            )
+        raise invalid(message)
     if not 1 <= cpus <= len(limits.cpu_ids):
-        raise invalid(
+        message = (
             f"--cpus {cpus} is outside what the queue allows: between 1 and {len(limits.cpu_ids)}"
         )
+        if len(limits.cpu_ids) < cpus <= len(unreserved.cpu_ids):
+            message += (
+                f". The machine has {len(detected.cpu_ids)} but the rest are kept in reserve "
+                "for services and interactive work. Only the machine's owner should change "
+                "that, with `proqu config set reserve_cpus`"
+            )
+        raise invalid(message)
     if gpus < 0:
         raise invalid("--gpus cannot be negative")
     if gpus and not vram:
@@ -543,9 +576,17 @@ def cmd_limits(args, command: list[str]) -> int:
     current = load_config()
     limits = config.effective_limits(detected, current)
     settings = config.settings(current)
+    unreserved = config.effective_limits(detected, current, reserved=False)
+    held_ram, held_cpus = config.reserve(detected, current)
     print("What the queue may use on this machine:")
-    print(f"  RAM: {format_size(limits.ram)}" + _of(limits.ram, detected.ram, format_size))
-    print(f"  CPUs: {len(limits.cpu_ids)}" + _of(len(limits.cpu_ids), len(detected.cpu_ids), str))
+    print(
+        f"  RAM: {format_size(limits.ram)}"
+        + _of(limits.ram, unreserved.ram, detected.ram, format_size)
+    )
+    print(
+        f"  CPUs: {len(limits.cpu_ids)}"
+        + _of(len(limits.cpu_ids), len(unreserved.cpu_ids), len(detected.cpu_ids), str)
+    )
     if limits.gpus:
         for gpu in limits.gpus:
             print(f"  GPU {gpu.index}: {format_size(gpu.vram)} memory")
@@ -562,13 +603,29 @@ def cmd_limits(args, command: list[str]) -> int:
             "GPU use is watched every few seconds. For kernel enforcement of RAM and CPU the "
             "machine needs systemd for the user and linger (`loginctl enable-linger`)."
         )
+    print(
+        f"Kept in reserve for services and interactive work: {format_size(held_ram)} RAM and "
+        f"{held_cpus} CPU {'core' if held_cpus == 1 else 'cores'}. Only the machine's owner "
+        "should change it, with reserve_ram and reserve_cpus in `proqu config`."
+    )
     print(f"Each session may bid up to {settings.bid_budget} points in total.")
     print(f"Every queued job gains {settings.aging_per_minute:g} priority points per minute.")
+    # the delay is counted in aging, so without aging it changes nothing
+    if settings.length_delay_cap and settings.aging_per_minute:
+        print(
+            "A long job counts as submitted later by a tenth of its --max, at most "
+            f"{format_duration(settings.length_delay_cap)}, so shorter jobs tend to go first."
+        )
     return 0
 
 
-def _of(limit, total, show) -> str:
-    return f" (of {show(total)}, lowered in config)" if limit < total else ""
+def _of(limit, unreserved, total, show) -> str:
+    """Why a limit is below the machine: the reserve only if it took off more than config did."""
+    if limit >= total:
+        return ""
+    if limit < unreserved:
+        return f" (of {show(total)}, after the reserve)"
+    return f" (of {show(total)}, lowered in config)"
 
 
 def cmd_config(args, command: list[str]) -> int:
@@ -579,7 +636,10 @@ def cmd_config(args, command: list[str]) -> int:
         current = load_config()
         for key, description in config.DESCRIPTIONS.items():
             value = current.get(key, config.DEFAULTS.get(key))
-            shown = "machine default" if value is None else config.describe(key, value)
+            if value is None:
+                shown = config.RESERVE_DEFAULTS.get(key, "machine default")
+            else:
+                shown = config.describe(key, value)
             print(f"{key} = {shown}    # {description}")
         return 0
     if not args.key:
@@ -659,8 +719,9 @@ def build_parser() -> argparse.ArgumentParser:
             "Wait for a job to end, then report how it ended, what to do next and the end of "
             "its log. Run it as a background command so you are woken when the job ends. "
             "Exit codes: 0 the job succeeded, 1 it ended any other way, 3 --timeout ran out, "
-            "4 the job is still queued but the queue config is broken, 130 or 143 the wait was "
-            "interrupted. For 3, 4, 130 and 143 the job has not ended, so wait again."
+            "4 the job is still queued but the queue config is broken, 129, 130 or 143 the wait "
+            "was stopped by a signal, 141 its output was closed. For 3, 4, 129, 130, 141 and 143 "
+            "the job may not have ended, so wait again."
         ),
     )
     wait.add_argument("id", help="the job id from submit or status")

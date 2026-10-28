@@ -28,6 +28,13 @@ Do not use it for quick or light work. Run these directly:
 
 Use judgement between the two. A five minute build on a few cores is fine either way. Anything that needs a GPU goes through the queue.
 
+Never put these through proqu:
+
+- services: anything that stays up serving or watching at low or medium load, such as dev servers, databases, file watchers or bots. A queue slot would be held for as long as the service lives, and the job would be killed at its max runtime.
+- multi-week jobs. Nothing here should hold the machine that long.
+
+A multi-day training run is a normal queue job. Give it an honest `--max`, and expect it to start after shorter jobs, as described under Bids.
+
 ## Estimate honestly
 
 Every request has to be right, because the queue plans around it and enforces it.
@@ -38,7 +45,7 @@ Every request has to be right, because the queue plans around it and enforces it
 - `--est`: your honest expected runtime. The queue uses it to plan and to show projected start times.
 - `--max`: a generous overestimate, about 1.5 to 3 times `--est`. The job is killed when it reaches max, so a hang cannot hold resources forever. Too tight and a slow run is lost, too loose and it blocks planning.
 
-Check what the queue allows with `proqu limits`. A request over the limit is refused, so split the work or lower it.
+Check what the queue allows with `proqu limits`. A request over the limit is refused, so split the work or lower it. The queue keeps a share of RAM and a core back for services and interactive work, so it allows a little less than the machine has. Do not change that reserve yourself, it is the machine owner's choice.
 
 ## The flow
 
@@ -52,7 +59,7 @@ Check what the queue allows with `proqu limits`. A request over the limit is ref
 
 2. Straight away, run `proqu wait <id>` with the Bash tool's `run_in_background` set. You are woken when the job ends, with its outcome and the end of its log. Do not poll `status` in a loop or sleep, the background wait does that for you.
 
-   `proqu wait` exits 0 when the job succeeded and 1 for any other outcome, so a failed or killed job shows up as a failed background command. That is normal, read its output. `proqu wait ID --timeout 30m` stops waiting after that long and exits 3 with the job still going. Exit 4 means the job is still queued but the queue config is broken, so tell the user. Exit 130 or 143 means the wait itself was stopped. After 3, 4, 130 or 143 the job has not ended, so run the wait again.
+   `proqu wait` exits 0 when the job succeeded and 1 for any other outcome, so a failed or killed job shows up as a failed background command. That is normal, read its output. `proqu wait ID --timeout 30m` stops waiting after that long and exits 3 with the job still going. Exit 4 means the job is still queued but the queue config is broken, so tell the user. Exit 129, 130, 141 or 143 means the wait itself was stopped. After any of these, or 3 or 4, the job may still be going, so run the wait again.
 
 3. Carry on with other work, or end your turn. If you end a turn with a job nobody waits on, you are asked to start a wait or cancel it.
 
@@ -85,7 +92,7 @@ Do not blindly resubmit with bigger numbers. Diagnose first from the log and the
 
 ## Bids
 
-The default is no bid, and that is almost always right. With no bids the queue is first come first served, with small jobs filling the gaps around large ones.
+The default is no bid, and that is almost always right. With no bids the queue is first come first served, except that a long job counts as submitted later, by a tenth of its `--max` and at most 4 hours (by default). So a job with a modest `--max` tends to go ahead of a long job submitted a little earlier, but a long job that has waited long enough still goes first. Small jobs also fill the gaps around large ones.
 
 Each session has a small bid budget (11000 by default) that is spent at submit. Every queued job gains 10 priority points per minute (by default), so a bid only buys a head start over jobs that were waiting before it.
 

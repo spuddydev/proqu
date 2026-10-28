@@ -1,6 +1,7 @@
 import fcntl
 import io
 import json
+import shutil
 import time
 
 import pytest
@@ -89,6 +90,7 @@ def test_session_start_does_not_show_the_id_when_it_was_exported(home, capsys, m
 
 def test_hooks_create_no_state_for_a_new_user(home, capsys, monkeypatch):
     monkeypatch.setenv("CLAUDE_ENV_FILE", str(home / "env.sh"))
+    shutil.rmtree(paths.state_path())  # the fixture wrote a config, a new user has none
     for event in ("session-start", "prompt", "stop"):
         assert hook(event, {"session_id": SESSION}, capsys) == (0, None, "")
     assert not paths.state_path().exists()

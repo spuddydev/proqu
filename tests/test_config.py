@@ -15,7 +15,7 @@ MACHINE = Machine(
 
 def test_defaults():
     assert config.settings({}) == config.Settings(
-        bid_budget=11000, aging_per_minute=10.0, kill_grace=10
+        bid_budget=11000, aging_per_minute=10.0, kill_grace=10, length_delay_cap=4 * 3600
     )
 
 
@@ -74,7 +74,7 @@ def test_effective_limits_lower_the_machine():
 
 def test_effective_limits_follow_a_smaller_machine():
     small = Machine(ram=4 * G, cpu_ids=(0,), gpus=())
-    assert config.effective_limits(small, {"ram": 8 * G, "cpus": 2}) == small
+    assert config.effective_limits(small, {"ram": 8 * G, "cpus": 2, "reserve_ram": 0}) == small
 
 
 def test_save_and_load(tmp_path, monkeypatch):
@@ -158,8 +158,9 @@ def test_unknown_keys_are_ignored(tmp_path):
 
 
 def test_settings_read_the_config():
-    assert config.settings({"bid_budget": 5, "aging_per_minute": 1.5, "kill_grace": 3}) == (
-        config.Settings(bid_budget=5, aging_per_minute=1.5, kill_grace=3)
+    given = {"bid_budget": 5, "aging_per_minute": 1.5, "kill_grace": 3, "length_delay_cap": 60}
+    assert config.settings(given) == (
+        config.Settings(bid_budget=5, aging_per_minute=1.5, kill_grace=3, length_delay_cap=60)
     )
 
 
@@ -245,3 +246,125 @@ def test_bad_values_load_without_validation(tmp_path):
 def test_save_leaves_no_temp_files(tmp_path):
     config.save(tmp_path / "config.json", {"ram": 5})
     assert [p.name for p in tmp_path.iterdir()] == ["config.json"]
+
+
+# The reserve
+
+FOUR = Machine(ram=16 * G, cpu_ids=(0, 1, 2, 3), gpus=())
+TWO = Machine(ram=16 * G, cpu_ids=(0, 1), gpus=())
+
+
+def test_default_reserve_on_a_four_cpu_machine():
+    limits = config.effective_limits(FOUR, {})
+    assert limits.ram == 16 * G - 16 * G // 10
+    assert limits.cpu_ids == (0, 1, 2)
+
+
+def test_default_reserve_on_a_two_cpu_machine_keeps_every_cpu():
+    limits = config.effective_limits(TWO, {})
+    assert limits.cpu_ids == (0, 1)
+    assert limits.ram == 16 * G - 16 * G // 10
+
+
+def test_reserve_of_zero_gives_the_whole_machine():
+    limits = config.effective_limits(FOUR, {"reserve_ram": 0, "reserve_cpus": 0})
+    assert (limits.ram, limits.cpu_ids) == (16 * G, (0, 1, 2, 3))
+
+
+def test_reserve_can_be_set_higher():
+    limits = config.effective_limits(FOUR, {"reserve_ram": 4 * G, "reserve_cpus": 2})
+    assert (limits.ram, limits.cpu_ids) == (12 * G, (0, 1))
+
+
+def test_explicit_limits_only_lower_the_reserved_limits():
+    lower = config.effective_limits(FOUR, {"ram": 8 * G, "cpus": 2})
+    assert (lower.ram, lower.cpu_ids) == (8 * G, (0, 1))
+    higher = config.effective_limits(FOUR, {"ram": 16 * G, "cpus": 4})
+    assert (higher.ram, higher.cpu_ids) == (16 * G - 16 * G // 10, (0, 1, 2))
+
+
+def test_effective_limits_can_leave_the_reserve_out():
+    limits = config.effective_limits(FOUR, {"ram": 8 * G}, reserved=False)
+    assert (limits.ram, limits.cpu_ids) == (8 * G, (0, 1, 2, 3))
+
+
+@pytest.mark.parametrize("ram", [1, 5, 10, 10**6])
+def test_reserve_never_leaves_no_ram(ram):
+    tiny = Machine(ram=ram, cpu_ids=(0,), gpus=())
+    assert config.effective_limits(tiny, {}).ram >= 1
+    assert config.effective_limits(tiny, {"reserve_ram": 10**9}).ram >= 1
+
+
+def test_reserve_never_leaves_no_cpus():
+    assert config.effective_limits(TWO, {"reserve_cpus": 9}).cpu_ids == (0,)
+
+
+@pytest.mark.parametrize(
+    ("key", "text", "stored"),
+    [("reserve_ram", "2G", 2 * G), ("reserve_ram", "0", 0), ("reserve_cpus", "0", 0)],
+)
+def test_set_reserve(key, text, stored):
+    assert config.set_value({}, key, text, MACHINE) == {key: stored}
+
+
+@pytest.mark.parametrize(
+    ("key", "text", "message"),
+    [
+        ("reserve_ram", "16G", "less than"),
+        ("reserve_ram", "lots", "cannot read size"),
+        ("reserve_cpus", "4", "between 0 and 3"),
+        ("reserve_cpus", "-1", "between 0 and 3"),
+    ],
+)
+def test_set_reserve_refuses(key, text, message):
+    with pytest.raises(ValueError, match=message):
+        config.set_value({}, key, text, MACHINE)
+
+
+def test_zero_reserve_in_the_file_is_valid(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text('{"reserve_ram": 0, "reserve_cpus": 0}')
+    assert config.load(path) == {"reserve_ram": 0, "reserve_cpus": 0}
+    path.write_text('{"reserve_cpus": -1}')
+    with pytest.raises(ValueError, match="reserve_cpus"):
+        config.load(path)
+
+
+# The length delay cap
+
+
+@pytest.mark.parametrize(("text", "stored"), [("2h", 7200), ("90m", 5400), ("0", 0)])
+def test_set_length_delay_cap(text, stored):
+    assert config.set_value({}, "length_delay_cap", text, MACHINE) == {"length_delay_cap": stored}
+
+
+@pytest.mark.parametrize("text", ["0G", "0B", "0.0M"])
+def test_set_reserve_ram_accepts_zero_with_a_unit(text):
+    assert config.set_value({}, "reserve_ram", text, MACHINE) == {"reserve_ram": 0}
+
+
+@pytest.mark.parametrize("text", ["0s", "0h", "0m"])
+def test_set_length_delay_cap_accepts_zero_with_a_unit(text):
+    assert config.set_value({}, "length_delay_cap", text, MACHINE) == {"length_delay_cap": 0}
+
+
+@pytest.mark.parametrize("text", ["0", "0s"])
+def test_set_kill_grace_refuses_zero(text):
+    with pytest.raises(ValueError, match="more than zero"):
+        config.set_value({}, "kill_grace", text, MACHINE)
+
+
+def test_set_length_delay_cap_refuses_nonsense():
+    with pytest.raises(ValueError, match="cannot read duration"):
+        config.set_value({}, "length_delay_cap", "long", MACHINE)
+
+
+def test_length_delay_cap_zero_is_valid_in_the_file(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text('{"length_delay_cap": 0}')
+    assert config.load(path) == {"length_delay_cap": 0}
+    assert config.settings({"length_delay_cap": 0}).length_delay_cap == 0
+
+
+def test_describe_length_delay_cap():
+    assert config.describe("length_delay_cap", 4 * 3600) == "4h"

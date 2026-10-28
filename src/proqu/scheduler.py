@@ -86,15 +86,20 @@ class Projection:
     end: float
 
 
-def order(queued: Iterable[Queued], aging_per_minute: float) -> list[Queued]:
+def order(queued: Iterable[Queued], aging_per_minute: float, delay_cap: float = 0) -> list[Queued]:
     """Highest score first, then earliest submitted, then id.
 
-    Score is bid - aging_per_minute * submitted_at / 60. It is scaled by 60 here so that
-    equal scores stay exactly equal for whole number inputs.
+    Score is bid - aging_per_minute * (submitted_at + delay) / 60, where delay is a tenth
+    of the job's max runtime, at most delay_cap. A long job so counts as submitted later.
+    It is scaled by 600 here so that equal scores stay exactly equal for whole number inputs.
     """
     return sorted(
         queued,
-        key=lambda q: (aging_per_minute * q.submitted_at - q.bid * 60, q.submitted_at, q.id),
+        key=lambda q: (
+            aging_per_minute * (q.submitted_at * 10 + min(q.max, delay_cap * 10)) - q.bid * 600,
+            q.submitted_at,
+            q.id,
+        ),
     )
 
 
@@ -145,7 +150,7 @@ class _Pool:
         return cpu_ids, gpu_ids
 
 
-def _over_limits(req: Request, limits: Limits) -> str | None:
+def over_limits(req: Request, limits: Limits) -> str | None:
     # only reachable when the limits were lowered after the job was submitted
     lowered = "the queue limits were lowered after it was submitted"
     if req.ram > limits.ram:
@@ -176,7 +181,7 @@ def _doomed(
                 reasons[q.id] = f"job {dep}, which it waits for, {ended}"
                 break
         else:
-            reason = _over_limits(q.req, limits)
+            reason = over_limits(q.req, limits)
             if reason:
                 reasons[q.id] = reason
     # A job waiting on a job that fails in this pass fails too.
@@ -214,10 +219,11 @@ def plan(
     dep_states: dict[str, str],
     now: float,
     aging_per_minute: float,
+    delay_cap: float = 0,
 ) -> Plan:
     """Which queued jobs start now and which fail. Fails are in score order."""
     running = list(running)
-    ordered = order(queued, aging_per_minute)
+    ordered = order(queued, aging_per_minute, delay_cap)
     live = {r.id for r in running} | {q.id for q in ordered}
     doomed = _doomed(limits, live, ordered, dep_states)
     pool = _Pool(limits, [(r.req, r.cpu_ids, r.gpu_ids) for r in running])
@@ -259,6 +265,7 @@ def project(
     dep_states: dict[str, str],
     now: float,
     aging_per_minute: float,
+    delay_cap: float = 0,
 ) -> dict[str, Projection]:
     """Expected position, start and end of each queued job that is not about to fail.
 
@@ -266,7 +273,7 @@ def project(
     and every dependency succeeds. A job that can never start has no entry.
     """
     running = list(running)
-    ordered = order(queued, aging_per_minute)
+    ordered = order(queued, aging_per_minute, delay_cap)
     position = {q.id: i for i, q in enumerate(ordered, 1)}
     live = {r.id for r in running} | set(position)
     doomed = _doomed(limits, live, ordered, dep_states)
@@ -277,7 +284,9 @@ def project(
     out = {}
     t = now
     while waiting:
-        for s in plan(limits, running, waiting.values(), states, t, aging_per_minute).start:
+        for s in plan(
+            limits, running, waiting.values(), states, t, aging_per_minute, delay_cap
+        ).start:
             q = waiting.pop(s.id)
             running.append(Running(q.id, q.req, s.cpu_ids, s.gpu_ids, t, q.est, q.max))
             ends[q.id] = t + q.est
