@@ -1,0 +1,10 @@
+{
+  "name": "proqu",
+  "version": "0.1.0",
+  "description": "A shared compute queue so coding agents can run heavy jobs without overloading the machine",
+  "author": {
+    "name": "spuddydev"
+  },
+  "repository": "https://github.com/spuddydev/proqu",
+  "keywords": ["queue", "compute", "gpu", "scheduler", "jobs"]
+}

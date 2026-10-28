@@ -10,7 +10,7 @@ import sqlite3
 import sys
 import time
 
-from proqu import config, machine, paths, procs, report
+from proqu import config, hooks, machine, paths, procs, report
 from proqu import limits as limits_module
 from proqu import tick as ticking
 from proqu.store import ACTIVE, TERMINAL, Job, LockTimeout, Store, StoreError
@@ -701,6 +701,11 @@ def build_parser() -> argparse.ArgumentParser:
     configure.add_argument("key", nargs="?", help="the setting to change")
     configure.add_argument("value", nargs="?", help="the new value, for set")
     configure.set_defaults(handler=cmd_config)
+
+    # no help text, so it is left out of the command list the agent reads
+    hook = commands.add_parser("hook")
+    hook.add_argument("event", nargs="?", default="", help="session-start, prompt or stop")
+    hook.set_defaults(handler=lambda args, command: hooks.run(args.event))
     return parser
 
 

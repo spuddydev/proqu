@@ -333,3 +333,20 @@ def test_wait_reports_a_job_whose_supervisor_was_lost(queue, quick, capsys):
     assert f"Job {job.id} failed" in out
     assert "its supervisor was lost" in out
     assert "this was not the job's fault, resubmit it" in out
+
+
+def test_a_cached_only_pass_never_detects_the_machine(queue, monkeypatch):
+    monkeypatch.setenv("PROQU_JOB_ID", "outer1")
+    job = submit(command=("true",))
+    monkeypatch.delenv("PROQU_JOB_ID")
+
+    def detect(refresh=False):
+        raise AssertionError("detected the machine")
+
+    monkeypatch.setattr(machine, "snapshot", detect)
+    monkeypatch.setattr(machine, "cached", lambda: None)
+    tick.tick(cached_only=True)
+    assert Store().get(job.id).state == "queued"
+    monkeypatch.setattr(machine, "cached", lambda: machine.Machine(4 * G, CPUS, ()))
+    tick.tick(cached_only=True)
+    assert settle([job.id])[0].state == "succeeded"
