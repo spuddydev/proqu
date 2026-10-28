@@ -126,7 +126,7 @@ def _parse(key: str, text: str, machine: Machine):
             )
         return value
     if key == "reserve_ram":
-        value = 0 if text.strip() == "0" else parse_size(text)
+        value = 0 if _is_zero(text, "KMGTB") else parse_size(text)
         if value >= machine.ram:
             raise ValueError(
                 f"reserve_ram must be less than the {format_size(machine.ram)} this machine has"
@@ -179,10 +179,15 @@ def _parse(key: str, text: str, machine: Machine):
             raise ValueError("aging_per_minute cannot be negative")
         return value
     if key == "length_delay_cap":
-        return 0 if text.strip() == "0" else parse_duration(text)
+        return 0 if _is_zero(text, "smhd") else parse_duration(text)
     if text.strip() == "0":
         raise ValueError(f"{key} must be more than zero")
     return parse_duration(text)
+
+
+def _is_zero(text: str, units: str) -> bool:
+    """Whether text is zero, bare or with a unit such as 0G or 0s."""
+    return re.fullmatch(rf"0+(?:\.0+)?\s*(?:[{units}](?:i?b)?)?", text.strip(), re.I) is not None
 
 
 def _int(key: str, text: str) -> int:
