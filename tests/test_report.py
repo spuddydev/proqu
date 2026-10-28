@@ -135,3 +135,10 @@ def test_tail_keeps_a_line_that_starts_exactly_at_the_window(tmp_path):
     path = write(tmp_path, first + long_line + tail)
     lines = report.tail_lines(path, 5)
     assert lines == ["q" * (len(long_line) - 1), "yyyyyyyyyy"]
+
+
+def test_a_projected_start_that_has_come_reads_as_shortly():
+    now = 5000.0
+    for start in (now - 30, now, now + 0.5):
+        text = report.describe_place(report.Place(1, start, start + 60), now)
+        assert text == "position 1 in the queue, expected to start shortly and finish in 1m"
