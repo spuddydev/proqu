@@ -378,3 +378,28 @@ def test_a_reservation_blocked_only_by_cpu_count_is_kept():
     big = q("big", cpus=7, t=1)
     assert started(run(L8, running, [big, q("s", cpus=2, t=2, mx=1000)])) == []
     assert started(run(L8, running, [big, q("s", cpus=2, t=2, mx=100)])) == ["s"]
+
+
+# Running jobs holding ids outside lowered limits
+
+TWO_CPUS = Limits(8 * G, (0, 1), ())
+
+
+def test_a_running_gpu_outside_the_limits_does_not_stop_starts():
+    running = [r("g", gpu_ids=(5,), vram=1)]
+    assert started(run(GPUS, running, [q("a")])) == ["a"]
+
+
+def test_a_running_gpu_outside_the_limits_does_not_break_a_reservation():
+    running = [r("g", 63, gpu_ids=(5,), vram=1, mx=100)]
+    big = q("big", 64, t=1)
+    assert started(run(GPUS, running, [big, q("s", 1, t=2, mx=101)])) == []
+    assert started(run(GPUS, running, [big, q("s", 1, t=2, mx=100)])) == ["s"]
+
+
+def test_a_running_cpu_outside_the_limits_is_not_given_back_as_free():
+    # The running job holds cpu 0 and cpu 5. Only cpu 1 is free, now and at its end.
+    running = [r("x", cpu_ids=(0, 5), mx=100)]
+    big = q("big", cpus=2, t=1)
+    assert started(run(TWO_CPUS, running, [big, q("s", t=2, mx=1000)])) == []
+    assert started(run(TWO_CPUS, running, [big, q("s", t=2, mx=100)])) == ["s"]
