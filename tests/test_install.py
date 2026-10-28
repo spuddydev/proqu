@@ -11,13 +11,19 @@ from proqu.cli import VERSION
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / "install.sh"
-PLUGIN_FILES = ["bin/proqu", "src/proqu/cli.py", "skills/proqu/SKILL.md", "hooks/hooks.json"]
+PLUGIN_FILES = [
+    "bin/proqu",
+    "src/proqu/cli.py",
+    "skills/proqu/SKILL.md",
+    "hooks/hooks.json",
+    "monitors/monitors.json",
+]
 
 
 def archive(tmp_path):
     path = tmp_path / "proqu.tar.gz"
     with tarfile.open(path, "w:gz") as tar:
-        for name in ("bin", "src", "skills", "hooks", ".claude-plugin"):
+        for name in ("bin", "src", "skills", "hooks", "monitors", ".claude-plugin"):
             tar.add(ROOT / name, f"proqu/{name}")
     return path
 

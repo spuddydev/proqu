@@ -12,7 +12,7 @@ import signal
 import sys
 import time
 
-from proqu import paths, procs, report, tick
+from proqu import paths, procs, report, tick, watch
 from proqu.store import ACTIVE, TERMINAL, Job, Store
 from proqu.units import format_duration
 
@@ -87,6 +87,10 @@ def session_start(data: dict, session: str) -> dict | None:
             exported = True
         except OSError as error:
             print(f"proqu hook session-start: cannot write {env_file}: {error}", file=sys.stderr)
+    if os.environ.get("CLAUDE_PID") and paths.has_db():
+        # a running watch stops once its Claude Code process has moved on to this session
+        with contextlib.suppress(OSError, paths.StateDirError):
+            watch.record_session(os.environ["CLAUDE_PID"], session)
     lines = []
     if not exported:
         lines += [
@@ -110,7 +114,10 @@ def session_start(data: dict, session: str) -> dict | None:
     if active:
         lines += ["proqu jobs of this session are still in the queue:"]
         lines += _listed(active, 0)
-        lines += [f"Unless a wait is already running for one, run {_wait_hint(active)}."]
+        if watch.is_watched(session):
+            lines += ["The proqu monitor tells you when each ends, nothing more to run."]
+        else:
+            lines += [f"Unless a wait is already running for one, run {_wait_hint(active)}."]
     return _context("SessionStart", lines)
 
 
@@ -197,6 +204,8 @@ def _unreported(jobs: list[Job]) -> list[Job]:
 
 
 def _watched(store: Store, job: Job) -> bool:
+    if watch.is_watched(job.session):
+        return True
     return any(procs.is_alive(pid, ticks) for pid, ticks in store.waiters(job.id))
 
 
