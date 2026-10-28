@@ -19,11 +19,21 @@ SNAPSHOT_AGE = 3600
 FREE_VRAM_WAIT = 5
 
 
+VENDORS = ("nvidia", "amd", "apple")
+
+
 @dataclass(frozen=True)
 class GpuInfo:
+    """One GPU. Every GPU of a machine has the same vendor, the first one found.
+
+    vram 0 means the GPU has no memory of its own and uses the RAM, as on Apple silicon.
+    """
+
     index: int
     uuid: str
     vram: int
+    # a snapshot cached before vendors were known only ever held NVIDIA GPUs
+    vendor: str = "nvidia"
 
 
 @dataclass(frozen=True)
@@ -103,7 +113,7 @@ def _load(path: Path) -> Machine | None:
     sane = all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in numbers)
     if not sane or machine.ram == 0 or not machine.cpu_ids:
         return None
-    if not all(isinstance(gpu.uuid, str) for gpu in machine.gpus):
+    if not all(isinstance(gpu.uuid, str) and gpu.vendor in VENDORS for gpu in machine.gpus):
         return None
     return machine
 

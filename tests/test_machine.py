@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from proqu import machine
+from proqu import machine, paths
 
 
 def fake_proc(tmp_path, cgroup_line, mem_kib=16 * 1024**2):
@@ -263,6 +263,7 @@ def test_cgroup_path_above_the_mount_reads_the_root(tmp_path):
         {"ram": 1, "cpu_ids": [], "gpus": []},
         {"ram": 1, "cpu_ids": ["0"], "gpus": []},
         {"ram": 1, "cpu_ids": [0], "gpus": [{"index": 0, "uuid": 5, "vram": 1}]},
+        {"ram": 1, "cpu_ids": [0], "gpus": [{"index": 0, "uuid": "u", "vram": 1, "vendor": "x"}]},
     ],
 )
 def test_nonsense_snapshot_is_detected_again(tmp_path, monkeypatch, data):
@@ -311,3 +312,10 @@ def test_free_vram_when_nvidia_smi_fails_or_is_missing(tmp_path, monkeypatch):
     assert machine.free_vram() is None
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     assert machine.free_vram() is None
+
+
+def test_snapshot_from_before_vendors_reads_as_nvidia(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path))
+    old = {"ram": 1, "cpu_ids": [0], "gpus": [{"index": 0, "uuid": "GPU-a", "vram": 1}]}
+    paths.machine_path().write_text(json.dumps(old))
+    assert machine.cached().gpus == (machine.GpuInfo(0, "GPU-a", 1, "nvidia"),)
