@@ -1,14 +1,16 @@
 """The proqu command line. Every message is written for an agent to act on."""
 
 import argparse
+import contextlib
 import os
 import shlex
 import shutil
+import signal
 import sqlite3
 import sys
 import time
 
-from proqu import config, machine, paths, report
+from proqu import config, machine, paths, procs, report
 from proqu import limits as limits_module
 from proqu import tick as ticking
 from proqu.store import ACTIVE, TERMINAL, Job, LockTimeout, Store, StoreError
@@ -357,6 +359,107 @@ def cmd_cancel(args, command: list[str]) -> int:
     return 0
 
 
+# wait
+
+# how often wait looks at its job, and how often it runs a scheduling pass
+WAIT_POLL = 2.0
+WAIT_TICK = 10.0
+LOG_LINES = 20
+TIMED_OUT = 3
+
+
+class Terminated(Exception):
+    """Raised on SIGTERM, so a killed wait still cleans up after itself."""
+
+
+def cmd_wait(args, command: list[str]) -> int:
+    timeout = None
+    if args.timeout is not None:
+        timeout = parse_flag("--timeout", args.timeout, parse_duration)
+    store = Store()
+    job = own_job(store, args.id)
+    pid, ticks = procs.current()
+    previous = signal.getsignal(signal.SIGTERM)
+
+    def terminated(signum, frame):
+        # one is enough, cleanup must not be interrupted by another
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        raise Terminated
+
+    signal.signal(signal.SIGTERM, terminated)
+    stopped = (
+        f"Stopped waiting for job {job.id} before it ended. Run `proqu wait {job.id}` "
+        "as a background command again to keep waiting."
+    )
+    try:
+        with store.locked():
+            store.add_waiter(job.id, pid, ticks)
+        return wait_for(store, job.id, timeout)
+    except KeyboardInterrupt:
+        print(stopped, flush=True)
+        return 130
+    except Terminated:
+        print(stopped, flush=True)
+        return 143
+    finally:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        remove_waiter(job.id, pid)
+        signal.signal(signal.SIGTERM, signal.SIG_DFL if previous is None else previous)
+
+
+def wait_for(store: Store, job_id: str, timeout: float | None) -> int:
+    began = time.monotonic()
+    next_tick = began
+    first = True
+    while True:
+        if time.monotonic() >= next_tick:
+            quiet_tick(store)
+            next_tick = time.monotonic() + WAIT_TICK
+        job = own_job(store, job_id)
+        if job.state in TERMINAL:
+            return report_end(store, job)
+        if first and job.state == "queued":
+            now = time.time()
+            place = queue_outlook(store, now).get(job.id)
+            if place:
+                print(f"Job {job.id} is queued, {report.describe_place(place, now)}.", flush=True)
+        first = False
+        left = None if timeout is None else timeout - (time.monotonic() - began)
+        if left is not None and left <= 0:
+            print(
+                f"Stopped waiting after {format_duration(timeout)}: job {job.id} is still "
+                f"{job.state}. Run `proqu wait {job.id}` again to keep waiting.",
+                flush=True,
+            )
+            return TIMED_OUT
+        time.sleep(WAIT_POLL if left is None else min(WAIT_POLL, left))
+
+
+def report_end(store: Store, job: Job) -> int:
+    print(report.outcome(job, report.tail_lines(paths.log_path(job.id), LOG_LINES)), flush=True)
+    # after printing, so a crash repeats the report rather than losing it
+    with contextlib.suppress(LockTimeout), store.locked():
+        store.update(job.id, notified=True)
+    return 0 if job.state == "succeeded" else 1
+
+
+def quiet_tick(store: Store) -> None:
+    """A scheduling pass that never ends the wait: a busy queue just means try later."""
+    with contextlib.suppress(LockTimeout, sqlite3.Error):
+        ticking.tick(store)
+
+
+def remove_waiter(job_id: str, pid: int) -> None:
+    # a fresh connection, as an interrupted one may be left mid transaction
+    with contextlib.suppress(LockTimeout, StoreError, sqlite3.Error):
+        store = Store(lock_timeout=10)
+        try:
+            with store.locked():
+                store.remove_waiter(job_id, pid)
+        finally:
+            store.close()
+
+
 # logs
 
 
@@ -506,6 +609,19 @@ def build_parser() -> argparse.ArgumentParser:
     cancel = commands.add_parser("cancel", help="cancel one of this session's jobs")
     cancel.add_argument("id", help="the job id from submit or status")
     cancel.set_defaults(handler=cmd_cancel)
+
+    wait = commands.add_parser(
+        "wait",
+        help="wait for one of this session's jobs to end and report how it went",
+        description=(
+            "Wait for a job to end, then report how it ended, what to do next and the end of "
+            "its log. Run it as a background command so you are woken when the job ends. "
+            "Exits 0 when the job succeeded, 1 otherwise, 3 on --timeout."
+        ),
+    )
+    wait.add_argument("id", help="the job id from submit or status")
+    wait.add_argument("--timeout", help="stop waiting after this long, for example 30m")
+    wait.set_defaults(handler=cmd_wait)
 
     logs = commands.add_parser("logs", help="show the output of one of this session's jobs")
     logs.add_argument("id", help="the job id from submit or status")

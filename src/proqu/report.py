@@ -1,13 +1,14 @@
 """What the agent is told about its jobs: queue outlook, outcomes and log tails."""
 
 import os
+import signal
 from dataclasses import dataclass
 from pathlib import Path
 
 from proqu import scheduler
 from proqu import tick as ticking
 from proqu.store import Job, Store
-from proqu.units import format_duration
+from proqu.units import format_duration, format_size
 
 
 @dataclass(frozen=True)
@@ -88,3 +89,66 @@ def tail_lines(path: Path, count: int) -> list[str] | None:
         lines.pop()
     lines = [line.rstrip("\r").rsplit("\r", 1)[-1] for line in lines]
     return lines[-count:]
+
+
+def outcome(job: Job, log: list[str] | None) -> str:
+    """What the agent reads when its job has ended: what happened and what to do next."""
+    label = f" ({job.name})" if job.name else ""
+    if job.started_at is None:
+        when = " before it started"
+    else:
+        when = f" after {format_duration((job.ended_at or job.started_at) - job.started_at)}"
+    reason = f": {job.reason}" if job.reason else ""
+    lines = [f"Job {job.id}{label} {job.state}{when}{reason}"]
+    facts = []
+    if job.exit_code is not None:
+        facts.append(_exit(job.exit_code))
+    if job.peak_ram is not None:
+        facts.append(f"peak RAM {format_size(job.peak_ram)}")
+    if facts:
+        text = ", ".join(facts)
+        lines.append(f"{text[:1].upper()}{text[1:]}.")
+    lines.append(f"Next: {next_step(job)}")
+    if log:
+        lines.append(f"Last {len(log)} lines of the log (full log: `proqu logs {job.id}`):")
+        lines += log
+    else:
+        lines.append("The job wrote no output.")
+    return "\n".join(lines)
+
+
+def next_step(job: Job) -> str:
+    if job.state == "succeeded":
+        return "check its output and results before relying on them."
+    if job.state == "killed":
+        return (
+            "the job broke its own limit, not the queue's. Find out why from the log before "
+            "resubmitting, and raise its request only if it truly needs more."
+        )
+    if job.state == "cancelled":
+        return "nothing, unless you still need its results, then submit it again."
+    if job.reason == ticking.LOST:
+        return "this was not the job's fault, resubmit it."
+    if _dependency_failed(job):
+        return (
+            "fix and resubmit the job it waits for first, then resubmit this one "
+            "with --after set to the new id."
+        )
+    return "read the log to find out why, fix the cause, then resubmit."
+
+
+def _dependency_failed(job: Job) -> bool:
+    reason = job.reason or ""
+    return (
+        job.started_at is None and reason.startswith("job ") and ", which it waits for, " in reason
+    )
+
+
+def _exit(code: int) -> str:
+    if code >= 0:
+        return f"exit code {code}"
+    try:
+        name = signal.Signals(-code).name
+    except ValueError:
+        name = str(-code)
+    return f"ended by signal {name}"
