@@ -4,11 +4,11 @@ How proqu works, why, and what it does not promise.
 
 ## Shape
 
-proqu is a command line tool that uses only the Python standard library. It installs with one script, or as a plain Claude Code plugin, and needs nothing else. It has no server, no daemon and no network.
+proqu is a command line tool that uses only the Python standard library. It installs with one script, or as a plain Claude Code plugin, and needs nothing else. It has no server, no daemon and no network. The only long lived process is the session monitor, which lives as long as the Claude Code session.
 
 ## No resident server
 
-Nothing runs between commands. The queue moves on in a scheduling pass, and a pass runs:
+Apart from each session's monitor, nothing runs between commands. The queue moves on in a scheduling pass, and a pass runs:
 
 - in `submit`, `status`, `cancel` and `wait`. `logs`, `limits` and `config` run none
 - in every hook once the database exists, using only the cached machine snapshot and skipped if there is none, so a hook stays quick
@@ -157,11 +157,11 @@ A session is the unit of visibility, bidding and notification.
 - Outside Claude Code every caller shares the session `default`, so they all see and can cancel each other's jobs.
 - The owner has no view across sessions. `status --all` covers only the caller's session. To see or stop an agent's jobs the owner reads the database for the session id and runs the command with `PROQU_SESSION` set to it. The guide shows how.
 - `/clear` or forking a session gives a new session id. The new session cannot see the earlier one's jobs, bids or budget. Jobs from the earlier session keep running and finish. Nobody is woken for them.
-- A subagent shares its parent's session and can see the same jobs. A background `proqu wait` started by a subagent ends when the subagent does. The parent must run its own wait for any job it needs to hear about. The Stop hook then reminds it if a job is unwatched.
+- A subagent shares its parent's session and can see the same jobs. The session monitor reports a subagent's jobs to the parent, as they share the session. Without the monitor, a background `proqu wait` started by a subagent ends when the subagent does, so the parent must run its own wait for any job it needs to hear about. The Stop hook then reminds it if a job is unwatched.
 
 ## Notifications
 
-The agent hears about a finished job through a background `proqu wait`. The hooks are a safety net. SessionStart, Prompt and Stop report any outcome the wait did not, and each outcome is reported once. Each says what happened, what to do next and the command for the log. A `proqu wait` on a job that already ended prints the outcome again. The Stop hook blocks the agent from finishing while a job is unwatched, and lists the exact wait and cancel commands for each such job. It blocks once. Claude Code sets `stop_hook_active` on the retry, and the hook then lets the agent stop. So a job can still be left unwatched if the agent ignores the reminder.
+The agent hears about a finished job from the session monitor, `proqu watch`. Claude Code starts it with the session and turns each line it prints into a notification, which wakes the agent even when it is idle. Where it is not running, as under `claude -p` or after `/clear`, a background `proqu wait` does the same. The hooks are a safety net. SessionStart, Prompt and Stop report any outcome the monitor or wait did not, and each outcome is reported once. Each says what happened, what to do next and the command for the log. A `proqu wait` on a job that already ended prints the outcome again. The Stop hook blocks the agent from finishing while a job is unwatched, meaning no monitor runs for the session and no wait for the job, and lists the exact wait and cancel commands for each such job. It blocks once. Claude Code sets `stop_hook_active` on the retry, and the hook then lets the agent stop. So a job can still be left unwatched if the agent ignores the reminder.
 
 A hook ends itself after 8 seconds, inside the 10 second timeout the plugin sets. If the environment file is missing, SessionStart cannot export the session id. It shows the id instead, and says to put it in front of every command.
 

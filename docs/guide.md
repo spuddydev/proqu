@@ -338,7 +338,7 @@ A finished job is listed on one line: its state and reason, then "Next:" with wh
 - Exports `PROQU_SESSION` with the Claude Code session id, so every `proqu` command in the session uses it.
 - If the environment file is missing or cannot be written, it shows the session id and says to put `PROQU_SESSION=ID` in front of every `proqu` command. Without that the commands use the shared `default` session.
 - Reports jobs of the session that finished without being reported.
-- Lists jobs still in the queue and gives the exact `proqu wait ID` command for each.
+- Lists jobs still in the queue. If no monitor watches the session, it gives the exact `proqu wait ID` command for each.
 
 ### UserPromptSubmit
 

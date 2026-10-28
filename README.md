@@ -45,7 +45,7 @@ epoch 40 done, val loss 0.183
 - **Hard limits.** RAM and CPU are enforced by the kernel through cgroups where it can, and by a watch and kill fallback where it cannot. A job is killed at its maximum runtime, so a hang never holds the machine.
 - **Fair by default.** With no bids it is plain first in, first out. Agents can bid for urgency from a small budget, and every job gains priority as it waits, so nothing starves.
 - **Private per session.** An agent sees its own jobs, positions, bids and projected start and finish. It never sees anyone else's.
-- **No server, no dependencies.** One SQLite file under a lock and the Python standard library. Nothing runs when no job is running.
+- **No server, no dependencies.** One SQLite file under a lock and the Python standard library. Nothing runs but a light monitor per Claude Code session when no job is running.
 
 ## Install
 
@@ -125,7 +125,7 @@ flowchart LR
 ```
 
 1. **The agent submits** a job with its RAM, cores, optional GPUs, an honest runtime estimate and a generous maximum. Anything bigger than the machine allows is refused at once.
-2. **The queue schedules** on every command and every hook. There is no daemon. A job starts when it fits and is next in line, or when it fits in a gap and will finish before the job at the front could start.
+2. **The queue schedules** on every command, every hook and every 10 seconds in each session's monitor. There is no daemon. A job starts when it fits and is next in line, or when it fits in a gap and will finish before the job at the front could start.
 3. **A supervisor runs the job**, one per running job, living only as long as the job. It holds the job to its request and kills it at its maximum runtime.
 4. **The agent is woken.** The plugin's monitor tells the agent the moment its job ends, even while it is idle. Where the monitor is not running, as in `claude -p`, the agent runs `proqu wait` in the background instead, and the hooks remind it before it stops.
 
