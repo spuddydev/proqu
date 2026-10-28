@@ -14,7 +14,7 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from proqu import darwin, paths
+from proqu import amd, darwin, paths
 
 # how long a detected machine is trusted before it is detected again
 SNAPSHOT_AGE = 3600
@@ -265,6 +265,25 @@ def detect_cpus(
 
 
 def detect_gpus() -> tuple[GpuInfo, ...] | None:
+    """The GPUs of one vendor, NVIDIA first, then AMD. None when a query failed.
+
+    A machine with GPUs of both is offered only its NVIDIA ones.
+    """
+    nvidia = detect_nvidia()
+    if nvidia != ():
+        return nvidia
+    return detect_amd()
+
+
+def detect_amd(sys_root: Path = Path("/sys")) -> tuple[GpuInfo, ...] | None:
+    """AMD GPUs from sysfs: empty when there are none, None when they cannot be read."""
+    found = amd.detect(sys_root)
+    if found is None:
+        return None
+    return tuple(GpuInfo(gpu.index, amd.key(gpu), gpu.vram, "amd") for gpu in found)
+
+
+def detect_nvidia() -> tuple[GpuInfo, ...] | None:
     """NVIDIA GPUs from nvidia-smi: empty when it is missing, None when it fails."""
     if not shutil.which("nvidia-smi"):
         return ()
@@ -324,7 +343,9 @@ def apple_gpus() -> tuple[GpuInfo, ...]:
 
 
 def free_vram() -> dict[int, int] | None:
-    """Free memory on each NVIDIA GPU by index, or None when it cannot be read."""
+    """Free memory on each GPU by index, or None when it cannot be read."""
+    if gpu_vendor() == "amd":
+        return amd.free_vram()
     if not shutil.which("nvidia-smi"):
         return None
     try:

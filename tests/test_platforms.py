@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from proqu import cli, darwin, limits, machine, procs, runner
+from proqu import amd, cli, darwin, limits, machine, procs, runner
 from proqu.cli import main
 
 from .test_runner import ended, log_of, starting_job
@@ -143,3 +143,19 @@ def test_apple_gpu_is_not_watched_and_has_no_variable(home, monkeypatch):
     assert limits.gpu_apps() == []
     runner.supervise(job.id)
     assert log_of(job).strip() == "[]"
+
+
+def test_nvidia_comes_first_then_amd(monkeypatch):
+    found = (amd.AmdGpu(1, "", 8 * G, 7, "0000:03:00.0"),)
+    monkeypatch.setattr(amd, "detect", lambda sys_root=None: found)
+    monkeypatch.setattr(machine, "detect_nvidia", lambda: ())
+    assert machine.detect_gpus() == (machine.GpuInfo(1, "AMD-1", 8 * G, "amd"),)
+    nvidia = (machine.GpuInfo(0, "GPU-a", G),)
+    monkeypatch.setattr(machine, "detect_nvidia", lambda: nvidia)
+    assert machine.detect_gpus() == nvidia
+    # a failed NVIDIA query keeps the previous GPUs rather than trying AMD
+    monkeypatch.setattr(machine, "detect_nvidia", lambda: None)
+    assert machine.detect_gpus() is None
+    monkeypatch.setattr(machine, "detect_nvidia", lambda: ())
+    monkeypatch.setattr(amd, "detect", lambda sys_root=None: None)
+    assert machine.detect_gpus() is None
