@@ -60,3 +60,11 @@ def test_tail_help_says_the_window_can_cut_lines_short(capsys):
         main(["logs", "--help"])
     out = " ".join(capsys.readouterr().out.split())
     assert "256 KiB" in out and "0 for the whole log" in out
+
+
+def test_whole_log_is_written_raw(home, capsys):
+    job = submit()
+    paths.log_path(job.id).write_bytes(b"10%\r50%\r100%\r\nok\xff\n")
+    capsys.readouterr()
+    assert main(["logs", job.id, "--tail", "0"]) == 0
+    assert capsys.readouterr().out == "10%\r50%\r100%\r\nok�\n"
