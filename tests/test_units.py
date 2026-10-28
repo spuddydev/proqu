@@ -38,6 +38,9 @@ def test_parse_size_refuses(text):
         ("1h 30m", 5400),
         ("1d", 86400),
         ("1.5h", 5400),
+        ("0.5s", 1),
+        ("2.5s", 3),
+        (" 20m ", 1200),
     ],
 )
 def test_parse_duration(text, expected):

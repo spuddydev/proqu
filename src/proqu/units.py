@@ -4,6 +4,7 @@ Every value needs an explicit unit. A bare number is refused, because guessing
 between bytes and gigabytes, or seconds and minutes, misallocates silently.
 """
 
+import math
 import re
 
 _SIZE_UNITS = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
@@ -43,7 +44,8 @@ def parse_duration(text: str) -> int:
             f"cannot read duration {text!r}: give numbers with units, for example 90s, 20m or 1h30m"
         )
     parts = _DURATION_PART.findall(text)
-    seconds = round(sum(float(n) * _DURATION_UNITS[u] for n, u in parts))
+    # half seconds round up, so 0.5s is one second rather than nothing
+    seconds = math.floor(sum(float(n) * _DURATION_UNITS[u] for n, u in parts) + 0.5)
     if seconds <= 0:
         raise ValueError(f"duration {text!r} must be more than zero")
     return seconds
