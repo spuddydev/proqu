@@ -1,0 +1,14 @@
+{
+  "name": "proqu",
+  "description": "The proqu shared compute queue for coding agents",
+  "owner": {
+    "name": "spuddydev"
+  },
+  "plugins": [
+    {
+      "name": "proqu",
+      "source": "./",
+      "description": "Queue compute heavy jobs such as training, large builds and long simulations, fairly shared between agents"
+    }
+  ]
+}
