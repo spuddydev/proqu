@@ -1,0 +1,40 @@
+name: pr-checks
+
+on:
+  pull_request:
+    # only the way into main is checked, work into dev is checked locally
+    branches: [main]
+    # edited reruns the checks when the title or body changes
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # a rebase lands every commit on main as is, and a squash lands the title,
+  # so both have to be conventional before anything merges
+  commits:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - run: .github/scripts/check-commits.sh
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+
+  pr-template:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - run: .github/scripts/check-template.sh
+        env:
+          BODY: ${{ github.event.pull_request.body }}
