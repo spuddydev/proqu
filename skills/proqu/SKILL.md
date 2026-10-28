@@ -5,7 +5,7 @@ description: Use before running any compute heavy job on this machine, such as t
 
 # proqu: the shared compute queue
 
-This machine is shared by several agents. proqu is one queue per user that all of them use, so heavy jobs run one after another instead of fighting over memory, cores and GPUs. Every job states what it needs, and the limits are hard: a job that goes over its own request is killed.
+This machine is shared by several agents. proqu is one queue per user that all of them use, so heavy jobs run one after another instead of fighting over memory, cores and GPUs. A job starts only when it fits the limits and the memory free right now, so it may also wait for memory that other programs are using. Every job states what it needs, and the limits are hard: a job that goes over its own request is killed.
 
 Never run heavy work outside the queue on a shared machine. It starves everyone else's jobs and can bring the machine down.
 
@@ -47,6 +47,8 @@ Every request has to be right, because the queue plans around it and enforces it
 
 Check what the queue allows with `proqu limits`. A request over the limit is refused, so split the work or lower it. The queue keeps a share of RAM and a core back for services and interactive work, so it allows a little less than the machine has. Do not change that reserve yourself, it is the machine owner's choice.
 
+A job under the limits can still wait for memory that other programs are using. That is normal. It stays queued and starts once the memory is free, and status shows it. Do not resubmit it or shrink the request for that. Shrink only if the request is truly oversized for the work.
+
 ## The flow
 
 1. Submit:
@@ -65,7 +67,7 @@ Check what the queue allows with `proqu limits`. A request over the limit is ref
 
 Other commands:
 
-- `proqu status [ID] [--all]`: your jobs with queue position, projected start and finish, time left, outcomes and your bid budget. `--all` includes every finished job.
+- `proqu status [ID] [--all]`: your jobs with queue position, projected start and finish, time left, outcomes and your bid budget. A job held for memory other programs use says "waiting for memory other programs are using" and its start time is uncertain. Cancel it if it waits too long. `--all` includes every finished job.
 - `proqu logs ID [--tail N]`: the job's output so far.
 - `proqu cancel ID`: stop a job you no longer need. Do this rather than leaving it queued.
 - `proqu limits`: what the queue may use on this machine.

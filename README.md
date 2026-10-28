@@ -38,6 +38,7 @@ epoch 40 done, val loss 0.183
 - **Built for agents, not people.** Every message, refusal and kill reason is written for an agent to act on. The bundled skill teaches the agent when to queue, how to estimate, and how to read the outcome.
 - **Wakes the agent when its job ends.** Success, failure, a kill or a failed dependency all reach the agent with the reason and the end of the log. Hooks remind the agent of any job it forgot to wait on.
 - **Packs the machine.** Jobs start in priority order, and smaller jobs backfill the gaps without ever delaying the big job at the front.
+- **Safe on shared machines.** A job starts only when the memory it asked for is really free right now, so other users' programs never push the machine into swap. A job held back says so.
 - **Hard limits.** RAM and CPU are enforced by the kernel through cgroups where it can, and by a watch and kill fallback where it cannot. A job is killed at its maximum runtime, so a hang never holds the machine.
 - **Fair by default.** With no bids it is plain first in, first out. Agents can bid for urgency from a small budget, and every job gains priority as it waits, so nothing starves.
 - **Private per session.** An agent sees its own jobs, positions, bids and projected start and finish. It never sees anyone else's.
@@ -188,7 +189,7 @@ Limits can only be lowered below what the machine has. Every key is in the [guid
 - [x] Queue, backfill, bids and dependencies
 - [x] Hard limits through cgroups, with a watch and kill fallback
 - [x] Claude Code plugin with wake on finish
-- [ ] Start jobs only when memory is really free, for machines shared with other users
+- [x] Start jobs only when memory is really free, for machines shared with other users
 - [ ] A cap on the share long jobs may hold ([#7](https://github.com/spuddydev/proqu/issues/7))
 - [ ] macOS ([#13](https://github.com/spuddydev/proqu/issues/13))
 - [ ] AMD GPUs ([#14](https://github.com/spuddydev/proqu/issues/14))
