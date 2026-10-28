@@ -77,16 +77,20 @@ def tail_lines(path: Path, count: int) -> list[str] | None:
         with open(path, "rb") as handle:
             size = handle.seek(0, os.SEEK_END)
             start = max(0, size - TAIL_BYTES)
-            handle.seek(start)
+            midline = False
+            handle.seek(max(0, start - 1))
+            if start:
+                midline = handle.read(1) != b"\n"
             data = handle.read()
     except FileNotFoundError:
         return None
     lines = data.decode(errors="replace").split("\n")
-    if start and len(lines) > 1:
-        # the read began mid line
-        lines = lines[1:]
     if lines[-1] == "":
         lines.pop()
+    if midline and len(lines) > 1:
+        # the first piece is the end of a line that began before the window, but a
+        # lone piece is kept: it is all that can be shown of a very long last line
+        lines = lines[1:]
     lines = [line.rstrip("\r").rsplit("\r", 1)[-1] for line in lines]
     return lines[-count:]
 

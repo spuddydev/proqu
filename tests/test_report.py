@@ -121,3 +121,17 @@ def test_dependency_failure_reads_as_one(home):
     assert failed.state == "failed"
     assert report.outcome(failed, None).startswith(f"Job {child.id} failed before it started: ")
     assert "resubmit the job it waits for first" in report.next_step(failed)
+
+
+def test_tail_of_a_last_line_longer_than_the_window(tmp_path):
+    path = write(tmp_path, b"y\n" + b"x" * (report.TAIL_BYTES * 2) + b"\n")
+    assert report.tail_lines(path, 5) == ["x" * (report.TAIL_BYTES - 1)]
+
+
+def test_tail_keeps_a_line_that_starts_exactly_at_the_window(tmp_path):
+    first = b"zz\n"
+    tail = b"yyyyyyyyyy\n"
+    long_line = b"q" * (report.TAIL_BYTES - len(tail) - 1) + b"\n"
+    path = write(tmp_path, first + long_line + tail)
+    lines = report.tail_lines(path, 5)
+    assert lines == ["q" * (len(long_line) - 1), "yyyyyyyyyy"]
