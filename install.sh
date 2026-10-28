@@ -9,7 +9,7 @@
 #
 # Settings, all optional:
 #   PROQU_VERSION   a release tag such as v1.0.0, default the latest release
-#   PROQU_HOME      where the files go, default ~/.local/share/proqu
+#   PROQU_DIR       where the files go, default ~/.local/share/proqu
 #   PROQU_BIN_DIR   where the command is linked, default ~/.local/bin
 #   PROQU_ARCHIVE   install from this local archive instead of downloading
 #   PROQU_NO_PLUGIN set to 1 to skip the Claude Code plugin
@@ -17,7 +17,7 @@
 set -eu
 
 repo="spuddydev/proqu"
-home="${PROQU_HOME:-$HOME/.local/share/proqu}"
+home="${PROQU_DIR:-$HOME/.local/share/proqu}"
 bin_dir="${PROQU_BIN_DIR:-$HOME/.local/bin}"
 version="${PROQU_VERSION:-latest}"
 
