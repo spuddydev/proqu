@@ -72,22 +72,31 @@ def _out_of_time(signum, frame):
 
 def session_start(data: dict, session: str) -> dict | None:
     env_file = os.environ.get("CLAUDE_ENV_FILE")
+    exported = False
     if env_file:
         # the job report below does not depend on this write
         try:
             with open(env_file, "a") as handle:
                 handle.write(f"export PROQU_SESSION={shlex.quote(session)}\n")
+            exported = True
         except OSError as error:
             print(f"proqu hook session-start: cannot write {env_file}: {error}", file=sys.stderr)
+    lines = []
+    if not exported:
+        lines += [
+            f"proqu could not set PROQU_SESSION for your shell. Put `PROQU_SESSION={session}` "
+            "in front of every proqu command, for example "
+            f"`PROQU_SESSION={session} proqu status`. Without it proqu uses the shared "
+            "`default` session, and you will not be woken or reminded about these jobs."
+        ]
     store = _open_store()
     if store is None:
-        return None
+        return _context("SessionStart", lines)
     try:
         active = [job for job in store.for_session(session) if job.state in ACTIVE]
         finished, more = _claim_finished(store, session)
     finally:
         store.close()
-    lines = []
     if finished:
         lines += ["proqu jobs of this session finished without being reported to you:"]
         lines += _listed(finished, more)

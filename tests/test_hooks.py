@@ -72,12 +72,23 @@ def test_session_start_exports_the_quoted_session_id(home, capsys, monkeypatch):
     assert env_file.read_text() == "export PROQU_SESSION='it'\"'\"'s mine'\n"
 
 
-def test_session_start_without_an_env_file_is_quiet(home, capsys, monkeypatch):
+def test_session_start_without_an_env_file_shows_the_session_id(home, capsys, monkeypatch):
     monkeypatch.delenv("CLAUDE_ENV_FILE", raising=False)
-    assert hook("session-start", {"session_id": SESSION}, capsys) == (0, None, "")
+    code, output, err = hook("session-start", {"session_id": SESSION}, capsys)
+    assert (code, err) == (0, "")
+    assert f"PROQU_SESSION={SESSION} proqu status" in context(output)
+    assert "`default` session" in context(output)
 
 
-def test_hooks_create_no_state_for_a_new_user(home, capsys):
+def test_session_start_does_not_show_the_id_when_it_was_exported(home, capsys, monkeypatch):
+    monkeypatch.setenv("CLAUDE_ENV_FILE", str(home / "env.sh"))
+    add("running", started_at=time.time())
+    _, output, _ = hook("session-start", {"session_id": SESSION}, capsys)
+    assert "could not set PROQU_SESSION" not in context(output)
+
+
+def test_hooks_create_no_state_for_a_new_user(home, capsys, monkeypatch):
+    monkeypatch.setenv("CLAUDE_ENV_FILE", str(home / "env.sh"))
     for event in ("session-start", "prompt", "stop"):
         assert hook(event, {"session_id": SESSION}, capsys) == (0, None, "")
     assert not paths.state_path().exists()
