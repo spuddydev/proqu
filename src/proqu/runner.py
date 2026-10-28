@@ -152,15 +152,20 @@ def start(job: Job, log) -> tuple[subprocess.Popen, limits.Monitor]:
         marker = paths.state_dir() / "logs" / f"{job.id}.started"
         proc = launch(job, log, limits.scope_command(job, marker))
         started, scope = limits.await_scope(proc, marker)
-        marker.unlink(missing_ok=True)
         if started:
+            marker.unlink(missing_ok=True)
             if scope is None:
                 return proc, limits.Monitor(job, proc.pid, uuids)
             return proc, limits.CgroupMonitor(job, proc.pid, scope, uuids)
-        # the scope was never made, so the job never ran and can run without it
+        # the scope looks like it was never made, but it may only have been slow
         with contextlib.suppress(OSError):
-            proc.kill()
+            os.killpg(proc.pid, signal.SIGKILL)
         proc.wait()
+        late = marker.exists()
+        marker.unlink(missing_ok=True)
+        if late:
+            # it ran, so running it again could repeat what it already did
+            raise OSError("its cgroup was too slow to start, the job was stopped, resubmit it")
         limits.mark_unavailable()
     proc = launch(job, log, job.argv)
     return proc, limits.Monitor(job, proc.pid, uuids)

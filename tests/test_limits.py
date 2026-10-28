@@ -264,3 +264,27 @@ def test_failing_gpu_query_is_retried_less_and_less_often(home, monkeypatch):
     assert gaps == sorted(gaps)
     assert gaps[-1] == limits.GPU_BACKOFF_MAX
     assert len(calls) < 15
+
+
+def test_job_that_starts_just_after_the_scope_wait_is_not_run_twice(home, monkeypatch, tmp_path):
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "systemd-run").write_text(
+        '#!/bin/sh\nwhile [ "$1" != -- ]; do shift; done\nshift\nexec "$@"\n'
+    )
+    (fake / "systemd-run").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake}:{os.environ['PATH']}")
+    monkeypatch.setattr(limits, "cgroups_available", lambda: True)
+
+    def late(proc, marker):
+        time.sleep(0.5)
+        return False, None
+
+    monkeypatch.setattr(limits, "await_scope", late)
+    counter = tmp_path / "count"
+    job = starting_job(["sh", "-c", f"echo x >> {counter}; sleep 30"])
+    runner.supervise(job.id)
+    done = ended(job)
+    assert done.state == "failed"
+    assert done.reason.startswith("could not start: its cgroup was too slow")
+    assert counter.read_text() == "x\n"
