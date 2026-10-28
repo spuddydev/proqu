@@ -156,10 +156,13 @@ def test_the_mac_is_kept_awake_while_a_job_runs(tmp_path, monkeypatch):
     (bin_dir / "caffeinate").write_text(f'#!/bin/sh\necho "$@" > {record}\n')
     (bin_dir / "caffeinate").chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    spawned = []
+    real_popen = runner.subprocess.Popen
+    monkeypatch.setattr(runner.subprocess, "Popen", lambda *a, **k: spawned.append(a))
     monkeypatch.setattr(sys, "platform", "linux")
     runner.keep_awake(4242)
-    time.sleep(0.2)
-    assert not record.exists()
+    assert spawned == []
+    monkeypatch.setattr(runner.subprocess, "Popen", real_popen)
     monkeypatch.setattr(sys, "platform", "darwin")
     runner.keep_awake(4242)
     deadline = time.monotonic() + 5
