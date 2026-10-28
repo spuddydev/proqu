@@ -114,7 +114,9 @@ def outcome(job: Job, log: list[str] | None) -> str:
         lines.append(f"{text[:1].upper()}{text[1:]}.")
     lines.append(f"Next: {next_step(job)}")
     if log:
-        lines.append(f"Last {len(log)} lines of the log (full log: `proqu logs {job.id}`):")
+        lines.append(
+            f"Last {len(log)} lines of the log (whole log: `proqu logs {job.id} --tail 0`):"
+        )
         lines += log
     else:
         lines.append("The job wrote no output.")

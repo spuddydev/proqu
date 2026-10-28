@@ -211,7 +211,7 @@ def test_wait_reports_a_succeeded_job(queue, quick, capsys):
     out = capsys.readouterr().out
     assert out.startswith(f"Job {job.id} (hi) succeeded after ")
     assert "Exit code 0" in out
-    assert out.endswith(f"(full log: `proqu logs {job.id}`):\nhello\n")
+    assert out.endswith(f"(whole log: `proqu logs {job.id} --tail 0`):\nhello\n")
     assert Store().get(job.id).notified
 
 

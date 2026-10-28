@@ -71,7 +71,7 @@ def test_outcome_of_a_succeeded_job():
         "Job abc123 (train) succeeded after 1m30s",
         "Exit code 0, peak RAM 3.0G.",
         "Next: check its output and results before relying on them.",
-        "Last 2 lines of the log (full log: `proqu logs abc123`):",
+        "Last 2 lines of the log (whole log: `proqu logs abc123 --tail 0`):",
         "a",
         "b",
     ]
