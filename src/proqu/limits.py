@@ -162,7 +162,9 @@ class CgroupMonitor(Monitor):
         self.path = path
         self.oom_kills = 0
         # if the limit was not applied, fall back to watching
-        self.enforced = _read_int(path / "memory.max") == job.ram
+        # the kernel rounds the limit up to a whole page
+        page = os.sysconf("SC_PAGE_SIZE")
+        self.enforced = _read_int(path / "memory.max") == -(-job.ram // page) * page
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._sample_until_stopped, daemon=True)
         self._thread.start()

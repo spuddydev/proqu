@@ -188,3 +188,13 @@ def test_failing_gpu_query_is_ignored(home, tmp_path, monkeypatch, capsys):
     runner.supervise(job.id)
     assert ended(job).state == "succeeded"
     assert capsys.readouterr().out.count("could not query GPU use") == 1
+
+
+def test_scope_limit_rounded_up_to_a_page_counts_as_applied(home, tmp_path):
+    page = os.sysconf("SC_PAGE_SIZE")
+    (tmp_path / "memory.max").write_text(str(100 * M + page))
+    (tmp_path / "memory.events").write_text("oom_kill 0\n")
+    job = starting_job(["true"], ram=100 * M + 1)
+    monitor = limits.CgroupMonitor(job, 1, tmp_path)
+    monitor.finish()
+    assert monitor.enforced
