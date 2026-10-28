@@ -237,3 +237,13 @@ def test_a_process_hiding_its_job_id_does_not_outlive_its_scope(cgroups, tmp_pat
     finally:
         with contextlib.suppress(OSError):
             os.kill(pid, signal.SIGKILL)
+
+
+def test_scope_command_names_systemd_run_by_full_path(home, monkeypatch, tmp_path):
+    fake = tmp_path / "bin"
+    fake.mkdir()
+    (fake / "systemd-run").write_text("#!/bin/sh\n")
+    (fake / "systemd-run").chmod(0o755)
+    monkeypatch.setenv("PATH", str(fake))
+    job = starting_job(["true"], env={"PATH": "/nowhere"})
+    assert limits.scope_command(job, tmp_path / "m")[0] == str(fake / "systemd-run")

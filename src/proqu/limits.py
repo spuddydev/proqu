@@ -303,8 +303,9 @@ def scope_command(job: Job, marker: Path) -> list[str]:
     A small shell step writes the marker before running the job, so the
     supervisor can tell a job that ran from a scope that was never made.
     """
+    # by full path, because the job's own PATH may not hold it
     return [
-        "systemd-run",
+        shutil.which("systemd-run") or "systemd-run",
         "--user",
         "--scope",
         "--quiet",
