@@ -297,3 +297,11 @@ def test_session_start_still_reports_when_the_env_file_cannot_be_written(home, c
     _, output, err = hook("session-start", {"session_id": SESSION}, capsys)
     assert done.id in context(output)
     assert "cannot write" in err
+
+
+def test_session_start_adds_to_the_env_file_without_replacing_it(home, capsys, monkeypatch):
+    env_file = home / "env.sh"
+    env_file.write_text("export OTHER=1\n")
+    monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
+    hook("session-start", {"session_id": SESSION}, capsys)
+    assert env_file.read_text() == f"export OTHER=1\nexport PROQU_SESSION={SESSION}\n"
