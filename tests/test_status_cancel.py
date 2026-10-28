@@ -1,12 +1,31 @@
+import itertools
 import os
 import time
+from types import SimpleNamespace
 
 import pytest
 
+from proqu import cli
 from proqu.cli import main
 from proqu.store import Store
 
 BASE = ["submit", "--ram", "2G", "--cpus", "2", "--est", "1m", "--max", "5m"]
+
+
+NOW = 1_800_000_000.0
+
+
+@pytest.fixture
+def frozen(monkeypatch):
+    """The command's own clock moves a millisecond per reading, so durations are exact.
+
+    It still moves, so that jobs submitted one after another keep their order.
+    """
+    ticks = itertools.count()
+    clock = SimpleNamespace(
+        time=lambda: NOW + next(ticks) / 1000, sleep=time.sleep, monotonic=time.monotonic
+    )
+    monkeypatch.setattr(cli, "time", clock)
 
 
 def submit(*extra):
@@ -131,13 +150,13 @@ def test_status_hides_the_oldest_finished_jobs(home, capsys):
     assert ids[2] in out and ids[11] in out
 
 
-def test_status_of_running_and_cancelling_jobs(home, capsys):
+def test_status_of_running_and_cancelling_jobs(home, frozen, capsys):
     running = submit()
     late = submit()
     overdue = submit()
     cancelling = submit()
     store = Store()
-    now = time.time()
+    now = NOW
     with store.locked():
         store.update(running.id, state="running", started_at=now - 20)
         store.update(late.id, state="running", started_at=now - 90)
@@ -192,7 +211,7 @@ def test_detail_lines(home, capsys):
     assert "peak RAM: 1.0G" in out
 
 
-def test_status_shows_places_of_queued_jobs(home, capsys, monkeypatch):
+def test_status_shows_places_of_queued_jobs(home, frozen, capsys, monkeypatch):
     monkeypatch.setenv("PROQU_SESSION", "s2")
     theirs = submit("--cpus", "4", "--name", "theirs", "--bid", "77")
     monkeypatch.setenv("PROQU_SESSION", "s1")
@@ -212,7 +231,7 @@ def test_status_shows_places_of_queued_jobs(home, capsys, monkeypatch):
     assert first.id in out
 
 
-def test_status_of_a_job_with_no_projection(home, capsys):
+def test_status_of_a_job_with_no_projection(home, frozen, capsys):
     job = submit()
     store = Store()
     with store.locked():
