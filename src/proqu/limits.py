@@ -32,8 +32,10 @@ OWN_LIMIT = "this was the job's own limit"
 
 
 def ram_reason(limit: int, peak: int) -> str:
+    # the kernel stops a job at the limit, so a sampled peak below it only lags behind
+    seen = f" (peak {format_size(peak)})" if peak > limit else " (stopped by the kernel)"
     return (
-        f"used more than its RAM limit of {format_size(limit)} (peak {format_size(peak)}): "
+        f"used more than its RAM limit of {format_size(limit)}{seen}: "
         f"{OWN_LIMIT}, reduce its memory use or resubmit with a larger --ram if it truly needs it"
     )
 
@@ -215,7 +217,7 @@ class CgroupMonitor(Monitor):
         # a kill we did not send, at the edge of the limit, is the kernel's
         near_limit = self.peak >= self.job.ram * 0.9
         if self.oom_kills or (code == -signal.SIGKILL and near_limit):
-            return "killed", ram_reason(self.job.ram, max(self.peak, self.job.ram))
+            return "killed", ram_reason(self.job.ram, self.peak)
         return None
 
 

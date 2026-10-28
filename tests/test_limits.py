@@ -355,3 +355,11 @@ def test_gpu_use_by_other_processes_is_ignored(home, tmp_path, monkeypatch):
     job = starting_job(["sleep", "1.5"])
     runner.supervise(job.id)
     assert ended(job).state == "succeeded"
+
+
+def test_ram_reason_gives_a_peak_only_when_it_is_above_the_limit():
+    over = limits.ram_reason(200 * M, 250 * M)
+    assert over.startswith("used more than its RAM limit of 200.0M (peak 250.0M): ")
+    lagging = limits.ram_reason(200 * M, 150 * M)
+    assert lagging.startswith("used more than its RAM limit of 200.0M (stopped by the kernel): ")
+    assert "peak" not in lagging
