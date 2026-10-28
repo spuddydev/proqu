@@ -4,13 +4,14 @@ Each hook reads the hook input JSON on stdin. A hook must never break or stall
 the agent's session, so every error becomes one line on stderr and exit 0.
 """
 
+import contextlib
 import json
 import os
 import shlex
 import sys
 import time
 
-from proqu import paths, procs
+from proqu import paths, procs, tick
 from proqu.store import ACTIVE, TERMINAL, Job, Store
 from proqu.units import format_duration
 
@@ -127,6 +128,9 @@ def _open_store() -> Store | None:
         return None
     store = Store(lock_timeout=LOCK_TIMEOUT)
     store.conn.execute(f"PRAGMA busy_timeout = {int(LOCK_TIMEOUT * 1000)}")
+    # with no daemon, each hook is also a chance to move the queue on
+    with contextlib.suppress(Exception):
+        tick.tick(store)
     return store
 
 

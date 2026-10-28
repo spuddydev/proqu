@@ -234,3 +234,27 @@ def test_cli_runs_hooks_and_tolerates_a_missing_event(home, capsys, monkeypatch)
     monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
     assert main(["hook"]) == 0
     assert "unknown event" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("event", ["session-start", "prompt", "stop"])
+def test_hooks_move_the_queue_on(home, monkeypatch, capsys, event):
+    from proqu import tick
+
+    passes = []
+    monkeypatch.setattr(tick, "tick", lambda store=None: passes.append(store))
+    add()
+    hook(event, {"session_id": SESSION}, capsys)
+    assert len(passes) == 1
+
+
+def test_a_failing_pass_does_not_break_the_hook(home, monkeypatch, capsys):
+    from proqu import tick
+
+    def broken(store=None):
+        raise RuntimeError("pass failed")
+
+    monkeypatch.setattr(tick, "tick", broken)
+    job = add(state="failed")
+    code, output, _ = hook("prompt", {"session_id": SESSION}, capsys)
+    assert code == 0
+    assert job.id in context(output)
