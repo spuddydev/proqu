@@ -57,6 +57,7 @@ def test_successful_job_runs_in_its_cwd_with_its_env(home, tmp_path):
     assert log_of(job).split() == [str(tmp_path), job.id, "[]"]
 
 
+@pytest.mark.skipif(len(os.sched_getaffinity(0)) < 2, reason="needs two CPUs")
 def test_job_is_pinned_to_its_cpus(home):
     cpu = sorted(os.sched_getaffinity(0))[-1]
     job = starting_job(["sh", "-c", "grep Cpus_allowed_list /proc/self/status"], cpu_ids=[cpu])
@@ -133,7 +134,9 @@ def test_spawned_supervisor_runs_the_job_detached(home):
         time.sleep(0.1)
     assert store.get(job.id).state == "succeeded"
     assert "hello" in log_of(job)
-    time.sleep(0.2)
+    deadline = time.monotonic() + 20
+    while procs.is_alive(pid, ticks) and time.monotonic() < deadline:
+        time.sleep(0.1)
     assert not procs.is_alive(pid, ticks)
 
 
@@ -182,3 +185,106 @@ def test_running_job_stops_on_cancel(home):
     done = ended(job)
     assert (done.state, done.reason) == ("cancelled", "cancelled by you")
     assert time.monotonic() - started < 10
+
+
+def cancel_after(job, delay):
+    import threading
+
+    def cancel():
+        store = Store()
+        while store.get(job.id).state != "running":
+            time.sleep(0.01)
+        time.sleep(delay)
+        with store.locked():
+            store.update(job.id, cancel_requested=True)
+
+    threading.Thread(target=cancel, daemon=True).start()
+
+
+def test_cancel_counts_when_the_job_ends_between_looks(home):
+    job = starting_job(["sleep", "0.4"])
+    cancel_after(job, 0.1)
+    runner.supervise(job.id)
+    assert ended(job).state == "cancelled"
+
+
+def test_job_cancelled_before_launch_gets_its_bid_back(home):
+    store = Store()
+    job = starting_job(["true"], bid=300, cancel_requested=True)
+    with store.locked():
+        store.add_bid_spent("s1", 300)
+    runner.supervise(job.id)
+    assert store.bid_spent("s1") == 0
+
+
+def test_job_that_could_not_start_gets_its_bid_back(home):
+    store = Store()
+    job = starting_job(["/no/such/program"], bid=300)
+    with store.locked():
+        store.add_bid_spent("s1", 300)
+    runner.supervise(job.id)
+    assert store.bid_spent("s1") == 0
+
+
+def test_job_that_ran_keeps_its_bid_spent(home):
+    store = Store()
+    job = starting_job(["true"], bid=300)
+    with store.locked():
+        store.add_bid_spent("s1", 300)
+    runner.supervise(job.id)
+    assert store.bid_spent("s1") == 300
+
+
+def test_unavailable_cpus_are_reported_plainly(home):
+    job = starting_job(["true"], cpu_ids=[4096])
+    runner.supervise(job.id)
+    assert (
+        ended(job).reason
+        == "could not start: its CPUs [4096] are no longer available on this machine"
+    )
+
+
+def test_assigned_gpus_are_visible_by_uuid(home):
+    job = starting_job(["sh", "-c", "echo $CUDA_VISIBLE_DEVICES"], gpus=1, vram=1, gpu_ids=[1])
+    runner.supervise(job.id)
+    assert log_of(job).strip() == "GPU-b"
+
+
+def test_first_writer_wins_over_the_supervisor(home):
+    job = starting_job(["sleep", "0.5"])
+    import threading
+
+    def lose():
+        store = Store()
+        while store.get(job.id).state != "running":
+            time.sleep(0.01)
+        with store.locked():
+            store.transition(job.id, ("running",), "failed", reason="lost")
+
+    threading.Thread(target=lose, daemon=True).start()
+    runner.supervise(job.id)
+    assert (ended(job).state, ended(job).reason) == ("failed", "lost")
+
+
+def test_supervisor_error_still_stops_the_job(home, monkeypatch):
+    def broken(store, job, proc):
+        raise RuntimeError("supervisor bug")
+
+    monkeypatch.setattr(runner, "watch", broken)
+    job = starting_job(["sh", "-c", "sleep 30 & sleep 30"])
+    with pytest.raises(RuntimeError):
+        runner.supervise(job.id)
+    assert procs.job_members(job.id, None) == []
+
+
+def test_supervisor_ignores_modules_in_the_callers_directory(home, tmp_path, monkeypatch):
+    (tmp_path / "json.py").write_text("raise SystemExit('shadowed')\n")
+    (tmp_path / "sqlite3.py").write_text("raise SystemExit('shadowed')\n")
+    monkeypatch.chdir(tmp_path)
+    job = starting_job([sys.executable, "-c", "print('fine')"])
+    runner.spawn_supervisor(job.id)
+    store = Store()
+    deadline = time.monotonic() + 20
+    while store.get(job.id).state in ("starting", "running") and time.monotonic() < deadline:
+        time.sleep(0.1)
+    assert store.get(job.id).state == "succeeded"

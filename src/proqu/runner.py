@@ -53,14 +53,22 @@ def spawn_supervisor(job_id: str) -> tuple[int, int]:
                 os.dup2(devnull, 0)
                 os.dup2(out, 1)
                 os.dup2(out, 2)
-                os.execve(sys.executable, [sys.executable, "-c", _BOOT, _SRC, job_id], env)
+                # a neutral start, whichever command happened to start the job
+                os.chdir("/")
+                os.umask(0o022)
+                # isolated mode keeps modules in the caller's directory out of the supervisor
+                argv = [sys.executable, "-I", "-c", _BOOT, _SRC, job_id]
+                os.execve(sys.executable, argv, env)
             os.write(write, str(grandchild).encode())
         finally:
             os._exit(0)
     os.close(write)
     os.waitpid(child, 0)
     with os.fdopen(read) as pipe:
-        pid = int(pipe.read())
+        text = pipe.read()
+    if not text.isdigit():
+        raise OSError(f"could not fork a supervisor, see {log}")
+    pid = int(text)
     ticks = procs.start_ticks(pid)
     if ticks is None:
         raise OSError(f"supervisor {pid} exited at once, see {log}")
@@ -85,26 +93,53 @@ def _supervise(store: Store, job_id: str) -> None:
         if job is None or job.state != "starting":
             return
         if job.cancel_requested:
-            store.transition(
-                job_id, ("starting",), "cancelled", reason=CANCELLED, ended_at=time.time()
-            )
+            _end_unstarted(store, job, "cancelled", CANCELLED)
             return
     with open(paths.log_path(job_id), "ab") as log:
         try:
+            _check_cpus(job)
             proc = launch(job, log)
         except (OSError, subprocess.SubprocessError, ValueError) as error:
-            _finish(store, job_id, "failed", f"could not start: {_describe(error)}", None)
+            with store.locked():
+                _end_unstarted(store, job, "failed", f"could not start: {_describe(error)}")
             return
-    with store.locked():
-        running = store.transition(
-            job_id, ("starting",), "running", job_pid=proc.pid, started_at=time.time()
-        )
-    outcome = watch(store, job, proc) if running else None
-    stop_members(job_id, proc.pid, settings.kill_grace)
-    code = proc.wait()
+    outcome = None
+    running = False
+    try:
+        with store.locked():
+            running = store.transition(
+                job_id, ("starting",), "running", job_pid=proc.pid, started_at=time.time()
+            )
+        if running:
+            outcome = watch(store, job, proc)
+    finally:
+        # whatever went wrong above, the job must not outlive its supervisor
+        stop_members(job_id, proc.pid, settings.kill_grace)
+        code = _reap(proc)
     if running:
         state, reason = outcome or classify(code)
         _finish(store, job_id, state, reason, code)
+
+
+def _end_unstarted(store: Store, job: Job, state: str, reason: str) -> None:
+    """End a job that never ran, giving its bid back. Call inside locked()."""
+    moved = store.transition(job.id, ("starting",), state, reason=reason, ended_at=time.time())
+    if moved and job.bid:
+        store.add_bid_spent(job.session, -job.bid)
+
+
+def _check_cpus(job: Job) -> None:
+    missing = set(job.cpu_ids) - os.sched_getaffinity(0)
+    if missing:
+        raise ValueError(f"its CPUs {sorted(missing)} are no longer available on this machine")
+
+
+def _reap(proc: subprocess.Popen) -> int | None:
+    """The job's exit code, or None if it cannot be made to exit at all."""
+    try:
+        return proc.wait(timeout=MEMBER_WAIT)
+    except subprocess.TimeoutExpired:
+        return None
 
 
 def launch(job: Job, log) -> subprocess.Popen:
@@ -137,12 +172,15 @@ def watch(store: Store, job: Job, proc: subprocess.Popen) -> tuple[str, str] | N
     while True:
         try:
             proc.wait(timeout=min(POLL, max(0.0, deadline - time.monotonic())))
-            return None
+            ended = True
         except subprocess.TimeoutExpired:
-            pass
+            ended = False
+        # a cancel counts even if the job ended by itself since the last look
         current = store.get(job.id)
         if current is not None and current.cancel_requested:
             return "cancelled", CANCELLED
+        if ended:
+            return None
         if time.monotonic() >= deadline:
             return (
                 "killed",
@@ -171,8 +209,10 @@ def stop_members(job_id: str, session: int, grace: float) -> None:
         time.sleep(0.1)
 
 
-def classify(code: int) -> tuple[str, str | None]:
+def classify(code: int | None) -> tuple[str, str | None]:
     """The outcome of a job that ended by itself."""
+    if code is None:
+        return "failed", "could not be stopped, its processes may be stuck in the kernel"
     if code == 0:
         return "succeeded", None
     if code < 0:
