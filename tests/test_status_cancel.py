@@ -255,3 +255,22 @@ def test_starting_job_shows_no_expected_finish(home, capsys):
     capsys.readouterr()
     main(["status"])
     assert f"{job.id}: starting\n" in capsys.readouterr().out
+
+
+def test_status_ranks_a_long_job_behind_a_later_short_one(home, capsys):
+    long = submit("--cpus", "4", "--est", "1h", "--max", "10h")
+    short = submit("--cpus", "4", "--est", "1m", "--max", "10m")
+    main(["status", short.id])
+    assert "position 1 in the queue" in capsys.readouterr().out
+    main(["status", long.id])
+    assert "position 2 in the queue" in capsys.readouterr().out
+
+
+def test_status_ranks_by_submit_time_when_the_length_delay_is_off(home, capsys):
+    main(["config", "set", "length_delay_cap", "0"])
+    long = submit("--cpus", "4", "--est", "1h", "--max", "10h")
+    short = submit("--cpus", "4", "--est", "1m", "--max", "10m")
+    main(["status", long.id])
+    assert "position 1 in the queue" in capsys.readouterr().out
+    main(["status", short.id])
+    assert "position 2 in the queue" in capsys.readouterr().out

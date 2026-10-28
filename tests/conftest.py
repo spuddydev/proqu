@@ -1,6 +1,8 @@
+import json
+
 import pytest
 
-from proqu import limits, machine, tick
+from proqu import limits, machine, paths, tick
 
 G = 1024**3
 
@@ -18,6 +20,8 @@ def home(tmp_path, monkeypatch):
     monkeypatch.setenv("PROQU_SESSION", "s1")
     monkeypatch.delenv("PROQU_JOB_ID", raising=False)
     monkeypatch.setattr(machine, "snapshot", lambda refresh=False: FAKE_MACHINE)
+    # most tests use the whole fake machine, the reserve has its own tests
+    paths.config_path().write_text(json.dumps({"reserve_ram": 0, "reserve_cpus": 0}))
     # command tests check the commands alone, real runs are in the queue tests
     monkeypatch.setattr(tick, "tick", lambda store=None, cached_only=False: None)
     # supervisor tests use the watch enforcement unless they ask for cgroups

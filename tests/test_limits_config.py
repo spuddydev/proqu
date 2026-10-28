@@ -123,3 +123,82 @@ def test_limits_name_the_enforcement(home, capsys, monkeypatch):
     kernel = capsys.readouterr().out
     assert "RAM and CPU are enforced by the kernel" in kernel
     assert "GPU use is watched" in kernel
+
+
+def test_limits_show_the_default_reserve(home, capsys):
+    main(["config", "unset", "reserve_ram"])
+    main(["config", "unset", "reserve_cpus"])
+    capsys.readouterr()
+    main(["limits"])
+    out = capsys.readouterr().out
+    assert "RAM: 14.4G (of 16.0G, after the reserve)" in out
+    assert "CPUs: 3 (of 4, after the reserve)" in out
+    assert "Kept in reserve for services and interactive work: 1.5G RAM and 1 CPU core." in out
+
+
+def test_limits_blame_config_when_it_lowers_to_the_reserved_figure(home, capsys):
+    main(["config", "set", "reserve_ram", "8G"])
+    main(["config", "set", "ram", "8G"])
+    main(["config", "set", "reserve_cpus", "1"])
+    main(["config", "set", "cpus", "3"])
+    capsys.readouterr()
+    main(["limits"])
+    out = capsys.readouterr().out
+    assert "RAM: 8.0G (of 16.0G, lowered in config)" in out
+    assert "CPUs: 3 (of 4, lowered in config)" in out
+
+
+def test_limits_blame_the_reserve_when_it_lowers_further_than_config(home, capsys):
+    main(["config", "set", "reserve_ram", "4G"])
+    main(["config", "set", "ram", "14G"])
+    capsys.readouterr()
+    main(["limits"])
+    assert "RAM: 12.0G (of 16.0G, after the reserve)" in capsys.readouterr().out
+
+
+def test_limits_show_a_zero_reserve(home, capsys):
+    main(["limits"])
+    out = capsys.readouterr().out
+    assert "RAM: 16.0G\n" in out
+    assert "work: 0B RAM and 0 CPU cores" in out
+
+
+def test_config_show_names_the_reserve_defaults(home, capsys):
+    main(["config", "unset", "reserve_ram"])
+    main(["config", "unset", "reserve_cpus"])
+    capsys.readouterr()
+    main(["config", "show"])
+    out = capsys.readouterr().out
+    assert "reserve_ram = 10% of the machine" in out
+    assert "reserve_cpus = 1 on machines with 4 or more CPUs, else 0" in out
+
+
+def test_config_show_a_set_reserve(home, capsys):
+    main(["config", "set", "reserve_ram", "2G"])
+    capsys.readouterr()
+    main(["config", "show"])
+    assert "reserve_ram = 2.0G" in capsys.readouterr().out
+
+
+def test_limits_describe_the_length_delay(home, capsys):
+    main(["limits"])
+    assert "a tenth of its --max, at most 4h" in capsys.readouterr().out
+
+
+def test_limits_leave_out_the_length_delay_when_off(home, capsys):
+    main(["config", "set", "length_delay_cap", "0"])
+    capsys.readouterr()
+    main(["limits"])
+    assert "tenth of its --max" not in capsys.readouterr().out
+
+
+def test_limits_leave_out_the_length_delay_when_aging_is_off(home, capsys):
+    main(["config", "set", "aging_per_minute", "0"])
+    capsys.readouterr()
+    main(["limits"])
+    assert "tenth of its --max" not in capsys.readouterr().out
+
+
+def test_config_show_the_length_delay(home, capsys):
+    main(["config", "show"])
+    assert "length_delay_cap = 4h" in capsys.readouterr().out
