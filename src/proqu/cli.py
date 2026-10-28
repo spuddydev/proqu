@@ -702,7 +702,8 @@ def build_parser() -> argparse.ArgumentParser:
     configure.add_argument("value", nargs="?", help="the new value, for set")
     configure.set_defaults(handler=cmd_config)
 
-    hook = commands.add_parser("hook", help="Claude Code hook entry point, reads JSON on stdin")
+    # no help text, so it is left out of the command list the agent reads
+    hook = commands.add_parser("hook")
     hook.add_argument("event", nargs="?", default="", help="session-start, prompt or stop")
     hook.set_defaults(handler=lambda args, command: hooks.run(args.event))
     return parser

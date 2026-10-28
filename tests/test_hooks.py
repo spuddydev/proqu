@@ -317,3 +317,9 @@ def test_session_start_adds_to_the_env_file_without_replacing_it(home, capsys, m
     monkeypatch.setenv("CLAUDE_ENV_FILE", str(env_file))
     hook("session-start", {"session_id": SESSION}, capsys)
     assert env_file.read_text() == f"export OTHER=1\nexport PROQU_SESSION={SESSION}\n"
+
+
+def test_hook_is_not_listed_in_the_help(capsys):
+    with pytest.raises(SystemExit):
+        main(["--help"])
+    assert "hook" not in capsys.readouterr().out
