@@ -2,6 +2,11 @@
 
 The supervisor asks its monitor about the job once a poll. A monitor answers
 with the reason the job must be stopped, or None while it is within limits.
+
+These limits stop mistakes, not deliberate evasion. A job can escape them, for
+example by running setsid with an empty environment so the process list no
+longer finds it, by calling systemd-run itself to leave its scope, or in watch
+mode by filling tmpfs shared memory that is not counted as its own.
 """
 
 import contextlib
