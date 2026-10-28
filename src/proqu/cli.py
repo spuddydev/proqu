@@ -371,8 +371,17 @@ TIMED_OUT = 3
 CONFIG_BROKEN = 4
 
 
+# signals that end a wait, each cleaning up first: SIGHUP is what a background command
+# gets when its terminal or session goes away
+STOPPING = (signal.SIGTERM, signal.SIGHUP)
+
+
 class Terminated(Exception):
-    """Raised on SIGTERM, so a killed wait still cleans up after itself."""
+    """Raised on SIGTERM or SIGHUP, so a killed wait still cleans up after itself."""
+
+    def __init__(self, signum: int = signal.SIGTERM):
+        super().__init__(signum)
+        self.signum = signum
 
 
 def cmd_wait(args, command: list[str]) -> int:
@@ -382,14 +391,16 @@ def cmd_wait(args, command: list[str]) -> int:
     store = Store()
     job = own_job(store, args.id)
     pid, ticks = procs.current()
-    previous = signal.getsignal(signal.SIGTERM)
+    previous = {signum: signal.getsignal(signum) for signum in STOPPING}
 
     def terminated(signum, frame):
         # one is enough, cleanup must not be interrupted by another
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        raise Terminated
+        for other in STOPPING:
+            signal.signal(other, signal.SIG_IGN)
+        raise Terminated(signum)
 
-    signal.signal(signal.SIGTERM, terminated)
+    for signum in STOPPING:
+        signal.signal(signum, terminated)
     stopped = (
         f"Stopped waiting for job {job.id} before it ended. Run `proqu wait {job.id}` "
         "as a background command again to keep waiting."
@@ -401,13 +412,25 @@ def cmd_wait(args, command: list[str]) -> int:
     except KeyboardInterrupt:
         print(stopped, flush=True)
         return 130
-    except Terminated:
+    except Terminated as error:
         print(stopped, flush=True)
-        return 143
+        return 128 + error.signum
     finally:
-        signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        remove_waiter(job.id, pid)
-        signal.signal(signal.SIGTERM, signal.SIG_DFL if previous is None else previous)
+        drop_waiter(job.id, pid)
+        for signum, handler in previous.items():
+            signal.signal(signum, signal.SIG_DFL if handler is None else handler)
+
+
+def drop_waiter(job_id: str, pid: int) -> None:
+    """Remove the waiter row even if a signal lands before the signals are ignored."""
+    for _ in range(3):
+        try:
+            for signum in STOPPING:
+                signal.signal(signum, signal.SIG_IGN)
+            remove_waiter(job_id, pid)
+            return
+        except (Terminated, KeyboardInterrupt):
+            continue
 
 
 def wait_for(store: Store, job_id: str, timeout: float | None) -> int:

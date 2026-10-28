@@ -1,4 +1,5 @@
 import os
+import signal
 import sqlite3
 import time
 
@@ -143,3 +144,40 @@ def test_terminated_after_the_report_is_not_a_stopped_wait(home, capsys, monkeyp
     out = capsys.readouterr().out
     assert f"Job {job.id} failed after" in out
     assert "Stopped waiting" not in out
+
+
+def interrupt_wait_with(monkeypatch, signum):
+    def stop(store, job_id, timeout):
+        os.kill(os.getpid(), signum)
+        raise AssertionError("the signal should have ended the wait")
+
+    monkeypatch.setattr(cli, "wait_for", stop)
+
+
+@pytest.mark.parametrize(("signum", "code"), [(signal.SIGTERM, 143), (signal.SIGHUP, 129)])
+def test_a_stopping_signal_ends_the_wait_and_restores_the_handlers(
+    home, capsys, monkeypatch, signum, code
+):
+    job = submit()
+    before = {sig: signal.getsignal(sig) for sig in cli.STOPPING}
+    interrupt_wait_with(monkeypatch, signum)
+    capsys.readouterr()
+    assert main(["wait", job.id]) == code
+    assert "Stopped waiting" in capsys.readouterr().out
+    assert {sig: signal.getsignal(sig) for sig in cli.STOPPING} == before
+    assert Store().waiters(job.id) == []
+
+
+def test_a_second_signal_cannot_interrupt_the_cleanup(home, monkeypatch):
+    job = submit()
+    real = cli.remove_waiter
+
+    def remove(job_id, pid):
+        # a hangup arriving while the terminate is being handled
+        os.kill(os.getpid(), signal.SIGHUP)
+        real(job_id, pid)
+
+    monkeypatch.setattr(cli, "remove_waiter", remove)
+    interrupt_wait_with(monkeypatch, signal.SIGTERM)
+    assert main(["wait", job.id]) == 143
+    assert Store().waiters(job.id) == []
