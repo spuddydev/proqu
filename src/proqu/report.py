@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from proqu import scheduler
 from proqu import tick as ticking
-from proqu.store import Store
+from proqu.store import Job, Store
 from proqu.units import format_duration
 
 
@@ -38,6 +38,12 @@ def outlook(
         seen = projected.get(job.id)
         places[job.id] = Place(position, seen.start, seen.end) if seen else Place(position)
     return places
+
+
+def expected_end(job: Job, now: float) -> float:
+    """When a running job is expected to end, by the rule the projection uses."""
+    started = job.started_at or now
+    return max(now, min(started + job.max, started + job.est))
 
 
 def describe_place(place: Place, now: float) -> str:

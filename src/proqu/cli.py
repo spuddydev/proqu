@@ -255,8 +255,11 @@ def cmd_status(args, command: list[str]) -> int:
     run_pass(store)
     session = current_session()
     now = time.time()
+    # built before printing, so a broken config fails before any output
+    places = queue_outlook(store, now)
+    budget = config.settings(load_config()).bid_budget
     if args.id:
-        print("\n".join(job_details(own_job(store, args.id), now)))
+        print("\n".join(job_details(own_job(store, args.id), now, places)))
     else:
         jobs = store.for_session(session)
         active = [job for job in jobs if job.state in ACTIVE]
@@ -268,24 +271,25 @@ def cmd_status(args, command: list[str]) -> int:
         if not shown:
             print("No jobs in this session.")
         for job in shown:
-            print(job_line(job, now))
+            print(job_line(job, now, places))
         if hidden:
             print(f"({hidden} older finished jobs hidden, `proqu status --all` shows them)")
-    budget = config.settings(load_config()).bid_budget
     remaining = max(0, budget - store.bid_spent(session))
     print(f"Bid budget: {remaining} of {budget} left for this session.")
     return 0
 
 
-def job_line(job: Job, now: float) -> str:
+def job_line(job: Job, now: float, places: dict[str, report.Place]) -> str:
     label = f" {job.name}" if job.name else ""
-    return f"{job.id}{label}: {job_state(job, now)}"
+    return f"{job.id}{label}: {job_state(job, now, places)}"
 
 
-def job_state(job: Job, now: float) -> str:
+def job_state(job: Job, now: float, places: dict[str, report.Place]) -> str:
     if job.state == "queued":
         waited = format_duration(now - job.submitted_at)
-        return f"queued for {waited}" + (f", bid {job.bid}" if job.bid else "")
+        place = places.get(job.id)
+        where = f", {report.describe_place(place, now)}" if place else ""
+        return f"queued for {waited}{where}" + (f", bid {job.bid}" if job.bid else "")
     if job.cancel_requested and job.state in ("starting", "running"):
         return f"{job.state}, stopping because you cancelled it"
     if job.state == "starting":
@@ -295,7 +299,12 @@ def job_state(job: Job, now: float) -> str:
         if ran >= job.max:
             return f"running for {format_duration(ran)}, past its max runtime and being stopped"
         left = format_duration(job.max - ran)
-        return f"running for {format_duration(ran)}, killed in {left} if still running"
+        if ran < job.est:
+            until = format_duration(report.expected_end(job, now) - now)
+            expected = f"expected to finish in about {until}"
+        else:
+            expected = f"past its {format_duration(job.est)} estimate"
+        return f"running for {format_duration(ran)}, {expected}, killed in {left} if still running"
     took = ""
     if job.started_at and job.ended_at:
         took = f" after {format_duration(job.ended_at - job.started_at)}"
@@ -304,10 +313,10 @@ def job_state(job: Job, now: float) -> str:
     return f"{job.state}{took}: {job.reason or 'no reason recorded'}"
 
 
-def job_details(job: Job, now: float) -> list[str]:
+def job_details(job: Job, now: float, places: dict[str, report.Place]) -> list[str]:
     lines = [
         f"job {job.id}" + (f" ({job.name})" if job.name else ""),
-        f"  state: {job_state(job, now)}",
+        f"  state: {job_state(job, now, places)}",
         f"  command: {shlex.join(job.argv)}",
         f"  in: {job.cwd}",
         f"  request: {describe_request(job.ram, job.cpus, job.gpus, job.vram)}",
