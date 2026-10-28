@@ -40,10 +40,11 @@ def detect(previous: Machine | None = None) -> Machine:
 
 
 def snapshot(refresh: bool = False) -> Machine:
-    """The machine as the queue sees it, detected at most once an hour.
+    """The machine as the queue sees it, cached for an hour.
 
     Inside a job the caller sits in the job's own cgroup and CPU pinning, which
-    would shrink what is detected, so a job only ever reads the snapshot.
+    would shrink what is detected. A job therefore never refreshes or replaces
+    the cached snapshot, and only detects for itself when there is none.
     """
     path = paths.machine_path()
     cached = _load(path)
@@ -79,15 +80,25 @@ def _save(path: Path, machine: Machine) -> None:
 
 
 def _load(path: Path) -> Machine | None:
+    """The cached snapshot, or None when it is missing or does not make sense."""
     try:
         data = json.loads(path.read_text())
-        return Machine(
+        machine = Machine(
             ram=data["ram"],
             cpu_ids=tuple(data["cpu_ids"]),
             gpus=tuple(GpuInfo(**gpu) for gpu in data["gpus"]),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
+    numbers = [machine.ram, *machine.cpu_ids]
+    for gpu in machine.gpus:
+        numbers += [gpu.index, gpu.vram]
+    sane = all(isinstance(n, int) and not isinstance(n, bool) and n >= 0 for n in numbers)
+    if not sane or machine.ram == 0 or not machine.cpu_ids:
+        return None
+    if not all(isinstance(gpu.uuid, str) for gpu in machine.gpus):
+        return None
+    return machine
 
 
 def detect_ram(proc: Path = Path("/proc"), cgroup_root: Path = Path("/sys/fs/cgroup")) -> int:
@@ -104,7 +115,7 @@ def detect_ram(proc: Path = Path("/proc"), cgroup_root: Path = Path("/sys/fs/cgr
 def _cgroup_memory_limit(proc: Path, cgroup_root: Path) -> int | None:
     """The tightest memory limit on this process's cgroup or its ancestors."""
     limits = []
-    for version, path in _cgroups(proc, "memory"):
+    for version, path, _ in _cgroups(proc, "memory"):
         if version == 2:
             limits += [_read_limit(node / "memory.max") for node in _ancestors(cgroup_root, path)]
         else:
@@ -115,23 +126,31 @@ def _cgroup_memory_limit(proc: Path, cgroup_root: Path) -> int | None:
 
 
 def _cgroup_cpu_limit(proc: Path, cgroup_root: Path) -> int | None:
-    """The tightest whole CPU count allowed by a cgroup v2 cpu.max quota."""
+    """The tightest whole CPU count allowed by a cgroup CPU quota."""
     counts = []
-    for version, path in _cgroups(proc, "cpu"):
-        if version != 2:
-            continue
-        for node in _ancestors(cgroup_root, path):
+    for version, path, controllers in _cgroups(proc, "cpu"):
+        if version == 2:
+            nodes, quota_file, period_file = _ancestors(cgroup_root, path), "cpu.max", None
+        else:
+            nodes = _ancestors(cgroup_root / controllers, path)
+            quota_file, period_file = "cpu.cfs_quota_us", "cpu.cfs_period_us"
+        for node in nodes:
             try:
-                quota, period = (node / "cpu.max").read_text().split()
+                if period_file:
+                    quota = (node / quota_file).read_text().strip()
+                    period = (node / period_file).read_text().strip()
+                else:
+                    quota, period = (node / quota_file).read_text().split()
             except (OSError, ValueError):
                 continue
+            # an unlimited quota reads "max" on v2 and "-1" on v1
             if quota.isdigit() and period.isdigit() and int(period) > 0:
                 counts.append(max(1, math.ceil(int(quota) / int(period))))
     return min(counts) if counts else None
 
 
-def _cgroups(proc: Path, controller: str) -> list[tuple[int, str]]:
-    """The cgroup paths of this process, as (version, path) pairs."""
+def _cgroups(proc: Path, controller: str) -> list[tuple[int, str, str]]:
+    """The cgroup paths of this process, as (version, path, controllers)."""
     try:
         lines = (proc / "self" / "cgroup").read_text().splitlines()
     except OSError:
@@ -143,20 +162,20 @@ def _cgroups(proc: Path, controller: str) -> list[tuple[int, str]]:
             continue
         _, controllers, path = parts
         if controllers == "":
-            found.append((2, path))
+            found.append((2, path, controllers))
         elif controller in controllers.split(","):
-            found.append((1, path))
+            found.append((1, path, controllers))
     return found
 
 
 def _ancestors(root: Path, path: str) -> list[Path]:
     """The cgroup directory for path and every parent up to the mount root.
 
-    In a private cgroup namespace the path is not visible under the mount, so
-    only the mount root itself is read.
+    In a private cgroup namespace the path may be missing under the mount, or
+    climb above it with "..", so only the mount root itself is read.
     """
     node = root / path.lstrip("/")
-    if not node.is_dir():
+    if ".." in Path(path).parts or not node.is_dir():
         return [root]
     nodes = [node]
     while node != root and root in node.parents:

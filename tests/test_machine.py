@@ -1,6 +1,9 @@
+import json
 import multiprocessing
 import os
 import time
+
+import pytest
 
 from proqu import machine
 
@@ -191,8 +194,9 @@ def test_cgroup_v1_reads_only_the_memory_controller(tmp_path):
     root = tmp_path / "cg"
     (root / "memory").mkdir(parents=True)
     (root / "memory" / "memory.limit_in_bytes").write_text(str(2 * 1024**3))
-    (root / "cpu,cpuacct" / "x").mkdir(parents=True)
-    (root / "cpu,cpuacct" / "x" / "memory.limit_in_bytes").write_text(str(1024**3))
+    # a decoy limit where the unfiltered code would look for the cpu line's path
+    (root / "memory" / "x").mkdir(parents=True)
+    (root / "memory" / "x" / "memory.limit_in_bytes").write_text(str(1024**3))
     assert machine.detect_ram(proc, root) == 2 * 1024**3
 
 
@@ -219,3 +223,64 @@ def test_snapshot_passes_previous_gpus_on(tmp_path, monkeypatch):
     monkeypatch.setattr(machine, "detect", lambda previous=None: seen.append(previous) or first)
     machine.snapshot(refresh=True)
     assert seen == [first]
+
+
+def test_cpu_quota_on_cgroup_v1(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1, 2, 3})
+    proc = fake_proc(tmp_path, "3:cpu,cpuacct:/box")
+    node = tmp_path / "cg" / "cpu,cpuacct" / "box"
+    node.mkdir(parents=True)
+    (node / "cpu.cfs_quota_us").write_text("200000\n")
+    (node / "cpu.cfs_period_us").write_text("100000\n")
+    assert machine.detect_cpus(proc, tmp_path / "cg") == (0, 1)
+
+
+def test_unlimited_cgroup_v1_cpu_quota(tmp_path, monkeypatch):
+    monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1})
+    proc = fake_proc(tmp_path, "3:cpu,cpuacct:/")
+    node = tmp_path / "cg" / "cpu,cpuacct"
+    node.mkdir(parents=True)
+    (node / "cpu.cfs_quota_us").write_text("-1\n")
+    (node / "cpu.cfs_period_us").write_text("100000\n")
+    assert machine.detect_cpus(proc, tmp_path / "cg") == (0, 1)
+
+
+def test_cgroup_path_above_the_mount_reads_the_root(tmp_path):
+    proc = fake_proc(tmp_path, "0::/../../outside")
+    root = tmp_path / "a" / "b" / "cg"
+    root.mkdir(parents=True)
+    (tmp_path / "a" / "outside").mkdir()
+    (tmp_path / "a" / "outside" / "memory.max").write_text(str(1024**3))
+    (root / "memory.max").write_text(str(2 * 1024**3))
+    assert machine.detect_ram(proc, root) == 2 * 1024**3
+
+
+@pytest.mark.parametrize(
+    "data",
+    [
+        {"ram": "1G", "cpu_ids": [0], "gpus": []},
+        {"ram": -1, "cpu_ids": [0], "gpus": []},
+        {"ram": 1, "cpu_ids": [], "gpus": []},
+        {"ram": 1, "cpu_ids": ["0"], "gpus": []},
+        {"ram": 1, "cpu_ids": [0], "gpus": [{"index": 0, "uuid": 5, "vram": 1}]},
+    ],
+)
+def test_nonsense_snapshot_is_detected_again(tmp_path, monkeypatch, data):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("PROQU_JOB_ID", raising=False)
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "machine.json").write_text(json.dumps(data))
+    assert machine.snapshot() == machine.detect()
+
+
+def test_unwritable_snapshot_is_not_an_error(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("PROQU_JOB_ID", raising=False)
+    state = machine.paths.state_dir()
+
+    def refuse(*args, **kwargs):
+        raise OSError("read only")
+
+    monkeypatch.setattr(machine.tempfile, "mkstemp", refuse)
+    assert machine.snapshot() == machine.detect()
+    assert not (state / "machine.json").exists()
