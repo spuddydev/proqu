@@ -26,6 +26,7 @@ Trade-offs:
 - Nothing to install, supervise or restart.
 - A crash or reboot is only noticed at the next proqu command. Until then the queue is stale. The first command afterwards ends the lost jobs as "supervisor lost" and carries on. A reboot is spotted from the boot id. A crash is spotted because the supervisor's pid and start time no longer match a live process.
 - If nobody runs a command and no job ends, nothing starts. In practice a waiting agent keeps passes running.
+- A broken config file stalls scheduling until it is fixed. No queued job starts and lost jobs are not ended. `status` and `submit` report it, and a `wait` on a queued job exits 4.
 
 ## One supervisor per running job
 
