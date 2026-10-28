@@ -296,7 +296,7 @@ Jobs can also end without being killed:
 
 ## Hooks
 
-The plugin installs three Claude Code hooks. Each one runs a scheduling pass first. A hook never breaks the session. Any error becomes one line on standard error and the hook exits 0.
+The plugin installs three Claude Code hooks. Each one runs a scheduling pass first, but only once the queue's database exists. Before the first `proqu` command creates it, a hook does nothing except SessionStart, which still exports the session id. A hook never breaks the session. Any error becomes one line on standard error and the hook exits 0.
 
 To stay quick:
 
@@ -305,7 +305,7 @@ To stay quick:
 - A hook gives up after 8 seconds, inside the 10 second timeout in the plugin.
 - At most 20 jobs are listed in one message, then a line says how many more.
 
-Each job is listed on one line in the same wording as the end of a `proqu wait`: its state and reason, a line starting "Next:" and the command for the end of its log.
+A finished job is listed on one line: its state and reason, then "Next:" with what to do, then the command for the last 50 lines of its log. A job still active shows only its id and state.
 
 ### SessionStart
 
@@ -320,7 +320,7 @@ Reports jobs of the session that finished since the agent last heard. Each outco
 
 ### Stop
 
-Blocks the agent from stopping while the session has an active job that nobody is waiting on, or an outcome not yet reported. The message lists the exact `proqu wait ID` command for each such job, to run in the background, and the exact `proqu cancel ID` command for each. It does not block a second time in the same stop.
+Blocks the agent from stopping while the session has an active job that nobody is waiting on, or an outcome not yet reported. The message lists the exact `proqu wait ID` command for each such job, to run in the background, and the exact `proqu cancel ID` command for each. It blocks once. Claude Code sets `stop_hook_active` on the retry and the hook then lets the agent stop, even if a job is still unwatched. It is a reminder, not a guarantee.
 
 ### Sessions
 
