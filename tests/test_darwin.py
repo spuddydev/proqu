@@ -113,7 +113,15 @@ def test_struct_size():
 
 
 def test_imports_without_loading_native_libraries():
-    assert darwin._cached is None or isinstance(darwin._cached, darwin._Lib)
+    # a fresh interpreter, where any library load during the import would fail it
+    code = (
+        "import ctypes\n"
+        "def refuse(*args, **kwargs):\n"
+        "    raise AssertionError('loaded a library at import')\n"
+        "ctypes.CDLL = refuse\n"
+        "import proqu.darwin\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)
 
 
 def test_total_ram_from_sysctl(monkeypatch):
