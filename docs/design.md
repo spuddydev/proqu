@@ -4,7 +4,7 @@ How proqu works, why, and what it does not promise.
 
 ## Shape
 
-proqu is a command line tool that uses only the Python standard library. It installs with one script, or as a plain Claude Code plugin, and needs nothing else. It has no server, no daemon and no network. The only long lived process is the session monitor, which lives as long as the Claude Code session.
+proqu is a command line tool that uses only the Python standard library. It runs on Linux and macOS. It installs with one script, or as a plain Claude Code plugin, and needs nothing else. It has no server, no daemon and no network. The only long lived process is the session monitor, which lives as long as the Claude Code session.
 
 ## No resident server
 
@@ -32,7 +32,7 @@ Trade-offs:
 
 Each running job has a short lived supervisor process. It:
 
-- launches the job in its own session, pinned to its cores
+- launches the job in its own session, pinned to its cores where the system allows
 - enforces the max runtime, and watches RAM and GPU use
 - stops the job's processes when it must, politely and then by force
 - records how the job ended
@@ -56,6 +56,7 @@ Trade-offs:
 - Simple and inspectable, and survives crashes.
 - One writer at a time. That is plenty for one queue per user per machine.
 - A lock held by a stuck command blocks others until it ends.
+- The schema is at version 2. Opening an older database migrates it in one transaction. The times jobs were first held for memory are in their own `held` table, not a column of `jobs`, so a supervisor still running from the older release keeps reading the `jobs` table it knows. A database from a newer proqu is refused with a message to update.
 - The queue is per user. proqu does not share a queue between users, so it cannot protect one user's jobs from another's. The free memory check at start partly helps, because it sees memory other users hold. It does not see their CPU use, and it does not help once a job has started.
 
 ## A reserve below the machine limits
@@ -107,19 +108,38 @@ Trade-offs:
 
 ## Free memory at start
 
-The limits say what the queue may use. They do not say what is free. When a pass is about to start a job, it also reads the memory free now and starts the job only if its request fits. For RAM that is `MemAvailable` less what running jobs may still grow into, which is each job's `--ram` less its use now. A starting job counts its whole request. For GPUs it is the free memory per GPU from `nvidia-smi`, less the unused part of running jobs' `--vram`, and the job is placed on a GPU with room. CPU is not checked, because more work than cores only slows things down.
+The limits say what the queue may use. They do not say what is free. When a pass is about to start a job, it also reads the memory free now and starts the job only if its request fits. For RAM that is `MemAvailable` (on macOS an estimate from `vm_stat`) less what running jobs may still grow into, which is each job's `--ram` less its use now. A starting job counts its whole request. For GPUs it is the free memory per GPU, from `nvidia-smi` or sysfs on AMD, less the unused part of running jobs' `--vram`, and the job is placed on a GPU with room. CPU is not checked, because more work than cores only slows things down.
 
 A job held back for this stays queued. It never fails for it. Projections, reservations and backfill use the limits alone, so the check only ever delays a start. A held job counts as the first blocked job.
 
 Trade-offs:
 
-- Free memory is read afresh at each pass that is about to start a job, and never cached. It costs a read of `/proc/meminfo` and one look through `/proc` for the processes of running jobs. For GPU jobs it also runs `nvidia-smi` for the free memory and, when jobs already hold GPUs, again for their use. It happens with the queue locked, so the free memory read gives up after 5 seconds.
-- Hooks never read GPU memory, because `nvidia-smi` is too slow. A GPU job starts only in a pass from a command, a supervisor ending, or the 10 second pass in `proqu wait`. If the free GPU memory cannot be read, GPU jobs wait. If only the use of running jobs cannot be read, each counts its whole `--vram`. If `MemAvailable` cannot be read, the limits alone decide on RAM.
+- Free memory is read afresh at each pass that is about to start a job, and never cached. On Linux it costs a read of `/proc/meminfo` and one look through `/proc` for the processes of running jobs. For NVIDIA GPU jobs it also runs `nvidia-smi` for the free memory and, when jobs already hold GPUs, again for their use. It happens with the queue locked, so the free memory read gives up after 5 seconds.
+- Hooks never read GPU memory, because the query is too slow. A GPU job starts only in a pass from a command, a supervisor ending, or the 10 second pass in `proqu wait`. If the free GPU memory cannot be read, GPU jobs wait. If only the use of running jobs cannot be read, each counts its whole `--vram`. If the free RAM cannot be read, the limits alone decide on RAM.
 - It is a check at start time and it is racy. Another program can take the memory a moment later, and nothing stops it after the job has started.
-- Later jobs can go ahead of a held job if they leave room for it within the limits and fit the free memory. Stopping the whole queue behind it could idle the machine for as long as another user holds the memory. The agent can see the wait in status and cancel.
+- Later jobs can go ahead of a held job if they leave room for it within the limits and fit the free memory, but only for `hold_limit`. See [Held jobs](#held-jobs).
 - No reserve or margin is taken off the free figure. The reserve applies to the limits only. Taking it off twice would leave a job sized to the limit unable to start even on an idle machine.
-- A job's use is its proportional set size. File backed pages counted in it make the figure slightly wrong.
-- In a container, free memory is the host's `MemAvailable`. The limits already respect a cgroup memory limit.
+- On Linux a job's use is its proportional set size. File backed pages counted in it make the figure slightly wrong. On macOS it is the memory footprint.
+- In a Linux container, free memory is the host's `MemAvailable`. The limits already respect a cgroup memory limit.
+- On macOS free memory is estimated from `vm_stat`, as free plus inactive plus speculative pages. That is unverified against Activity Monitor.
+- The Apple silicon GPU has no memory of its own, so only its slot is checked. Its memory is the RAM check above.
+
+### Held jobs
+
+A held job counts as the first blocked job, so later jobs may start ahead of it only if they leave room for it. That keeps the machine busy while another user holds memory. Alone it lets smaller jobs pass a large one for ever, as each new small job fits.
+
+So a job held for longer than `hold_limit` (30 minutes by default) stops the queue behind it. No later job in priority order starts until it has. Jobs ahead of it are not affected. A `hold_limit` of 0 turns the rule off.
+
+- The clock starts the first time a pass holds the job for RAM or GPU memory in use. It is kept until the job leaves the queue. If it reset whenever the job was blocked for some other reason, such as another job's reservation, smaller jobs could pass it for ever.
+- An unread GPU starts no clock. Hooks never read GPU memory, and it says nothing about other programs.
+- Status tells the held job that no later job may start ahead of it. It tells each later job that it waits behind an earlier job held too long, and never names that job, as sessions do not see each other.
+- Projections and reservations are unchanged. They use the limits alone.
+
+Trade-offs:
+
+- The machine can idle behind the stopped queue while another user holds the memory. That is the price of not starving a large job. The agent can see the wait in status and cancel.
+- The held time is kept in its own table, see [The store](#sqlite-with-a-file-lock).
+- The limit is a rule of thumb, not a measured fit.
 
 ## Limits stop mistakes, not evasion
 
@@ -128,20 +148,46 @@ The limits are there to catch an honest agent that got an estimate wrong. They a
 - leave the job's session with `setsid` and clear its environment. In watch mode the supervisor finds a job's processes by session and by the job id in their environment, so a process that has done both is no longer seen. In cgroup mode it stays in the scope, so it still counts against the cap and is killed when the job ends. GPU checks use the same lookup, so it escapes them in both modes
 - call `systemd-run` itself and start work outside the job's scope
 - in watch mode, hold memory in tmpfs or shared memory, which is not counted against the process
+- on AMD GPUs, use OpenGL, Vulkan or `/dev/kfd` directly, which ignore `ROCR_VISIBLE_DEVICES`
 
 Do not run proqu as a security boundary against code you do not trust.
 
-## Watch mode samples once a second
+## Enforcement differs by platform
 
-In watch mode RAM is read once a second. A spike that rises and falls between two samples is not seen. A fast allocation can also overshoot the limit before the next sample ends it. Cgroup mode does not have this problem, because the kernel enforces the cap.
+| | Linux cgroups | Linux watch | macOS |
+| --- | --- | --- | --- |
+| RAM | Kernel cap | Sampled once a second | Sampled four times a second |
+| RAM measure | Kernel count for the scope | Proportional set size | Memory footprint |
+| CPU | Kernel quota and pinning | Pinning only | Counted, not enforced |
+| Max runtime | Enforced | Enforced | Enforced |
 
-CPU is not capped in watch mode. Each job is only pinned to its cores, and a job can move itself onto cores given to others. Cgroup mode adds a CPU quota. Cgroup mode is preferred, and `proqu limits` says which one is in use.
+`proqu limits` says which applies. macOS has no cgroups, so it is always in watch mode. A spike that rises and falls between two samples is not seen, and a fast allocation can overshoot the limit before the next sample ends it. Cgroup mode does not have this problem, because the kernel enforces the cap.
 
-Memory is summed as proportional set size, so a page shared between processes counts once.
+On Linux in watch mode CPU is not capped. Each job is only pinned to its cores, and a job can move itself onto cores given to others. Cgroup mode adds a CPU quota and is preferred.
+
+macOS cannot pin a process to cores. So `--cpus` is counted for scheduling and a job is trusted to run that many threads. All logical cores are counted, performance and efficiency alike, though they are not equal.
+
+Linux sums proportional set size, so a page shared between processes counts once. macOS has no such count. It sums the memory footprint, which is what Activity Monitor shows as Memory and includes compressed and GPU memory. A page shared between a job's processes counts for each of them, so a job of many processes sharing memory may be killed a little early. The kernel's peak RSS is used for the recorded peak after a job ends, never to kill.
+
+A Mac that sleeps pauses a job but not its max runtime clock, so the supervisor runs `caffeinate -i -w` to prevent idle sleep while the job runs.
 
 ## GPU checks are best effort
 
-GPU use is checked by running `nvidia-smi` every 5 seconds, because it is too slow to run every second. A job can use a GPU for less than 5 seconds between checks without being seen. In a container with its own pid namespace, the pids that `nvidia-smi` reports may not match the pids proqu sees. Then GPU limits cannot be enforced reliably. If `nvidia-smi` fails, GPU limits are not checked, and the supervisor log says so. There is no kernel enforcement of GPU memory.
+GPU use is checked every 5 seconds, because `nvidia-smi` is too slow to run every second. A job can use a GPU for less than 5 seconds between checks without being seen. In a container with its own pid namespace, the pids that the GPU tools report may not match the pids proqu sees. Then GPU limits cannot be enforced reliably. If the query fails, GPU limits are not checked, and the supervisor log says so. There is no kernel enforcement of GPU memory.
+
+A machine has GPUs of one vendor. NVIDIA is used if `nvidia-smi` lists any, else AMD.
+
+### AMD
+
+AMD GPUs are found in sysfs, through the KFD topology and the DRM device files, so no tool is needed. APUs (under 1 GiB of VRAM) and partitioned GPUs are skipped, as MIG GPUs are. Free memory comes from sysfs. Per process use comes from KFD sysfs, else DRM fdinfo, else `amd-smi`. Only memory in use counts, as the ROCm runtime opens every GPU when it starts.
+
+Jobs are given `ROCR_VISIBLE_DEVICES`. The other ROCm variables stack on it and would filter a second time, so they are removed, and a job with no GPU has all of them set to `-1`. OpenGL, Vulkan and direct `/dev/kfd` use ignore the variable. Like NVIDIA this stops mistakes, not evasion.
+
+Everything AMD is untested on real hardware. Some details rest on documentation alone, such as the sysfs file for the compute partition and whether the ROCm device index matches the KFD node order.
+
+### Apple silicon
+
+Memory is shared with the CPU, so the GPU is offered as one slot whose memory is the RAM. A job asks for it with `--gpus 1` and counts its GPU memory in `--ram`, which the footprint includes. Only one job holds the slot, so GPU jobs are serialised. Metal has no visibility variable and per process GPU use needs root, so a job without `--gpus` is trusted not to use the GPU. Intel Macs are offered no GPU.
 
 ## Logs and the database are never pruned
 
@@ -167,5 +213,6 @@ A hook ends itself after 8 seconds, inside the 10 second timeout the plugin sets
 
 ## Not supported yet
 
-- macOS. Linux only, because it uses `/proc`, cgroups and systemd.
-- AMD GPUs. NVIDIA only, through `nvidia-smi`.
+- Windows.
+- Intel GPUs and other vendors.
+- Mixed GPU vendors on one machine. Only the first vendor found is used.
