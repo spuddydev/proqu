@@ -1,5 +1,6 @@
 import pytest
 
+from proqu import cli
 from proqu.cli import main
 from proqu.store import Store
 
@@ -200,3 +201,16 @@ def test_place_never_shows_other_sessions(home, capsys, monkeypatch):
     out = capsys.readouterr().out
     assert "Position 2 in the queue, expected to start in 1m" in out
     assert theirs.id not in out and "theirs" not in out and "77" not in out
+
+
+def test_submit_succeeds_when_the_queue_outlook_fails(home, capsys, monkeypatch):
+    assert submit("--cpus", "4") == 0
+    monkeypatch.setattr(
+        cli, "queue_outlook", lambda store, now: (_ for _ in ()).throw(cli.ProquError("broken"))
+    )
+    capsys.readouterr()
+    assert submit("--cpus", "4") == 0
+    out = capsys.readouterr().out
+    assert out.startswith("Queued job ")
+    assert "Next: run `proqu wait" in out
+    assert len(Store().for_session("s1")) == 2

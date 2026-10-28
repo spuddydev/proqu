@@ -150,10 +150,12 @@ def cmd_submit(args, command: list[str]) -> int:
     if after:
         print(f"Waits for: {', '.join(after)}.")
     if now.state == "queued":
-        when = time.time()
-        place = queue_outlook(store, when).get(job.id)
-        if place:
-            print(f"{sentence(report.describe_place(place, when))}.")
+        # the job is queued already, so a failed estimate must not fail the submit
+        with contextlib.suppress(ProquError, OSError, sqlite3.Error):
+            when = time.time()
+            place = queue_outlook(store, when).get(job.id)
+            if place:
+                print(f"{sentence(report.describe_place(place, when))}.")
     print(
         f"Next: run `proqu wait {job.id}` as a background command so you are woken when it ends. "
         f"Check on it with `proqu status {job.id}`."
