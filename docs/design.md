@@ -11,7 +11,7 @@ proqu is a command line tool that uses only the Python standard library. It need
 Nothing runs between commands. The queue moves on in a scheduling pass, and a pass runs:
 
 - in every command that reads or changes jobs
-- in every hook
+- in every hook, using only the cached machine snapshot and skipped if there is none, so a hook stays quick
 - when a supervisor ends, which is when a job ends
 - every 10 seconds inside `proqu wait`
 
@@ -57,6 +57,41 @@ Trade-offs:
 - A lock held by a stuck command blocks others until it ends.
 - The queue is per user. proqu does not share a queue between users, so it cannot protect one user's jobs from another's.
 
+## A reserve below the machine limits
+
+The queue may use the machine minus a reserve. By default that is 10% of RAM and one core on a machine with 4 or more cores. The owner can change it with `reserve_ram` and `reserve_cpus`.
+
+Trade-offs:
+
+- Services and interactive work keep some room, so a full queue does not freeze the machine or the owner's own session.
+- Jobs cannot use the whole machine, so a request near the machine's size is refused. The refusal names the reserve and says only the owner should change it.
+- The default is a guess. It is too much on a dedicated box and too little on a busy one, which is why it is config.
+- The reserve is never allowed to take everything. Jobs always keep some RAM and a core.
+
+## Long jobs count as submitted later
+
+Priority is the bid plus waiting time. A job also counts as submitted later by a tenth of its `--max`, at most 4 hours by default, set by `length_delay_cap`. So with no bids a job with a short `--max` tends to go ahead of a long one submitted a little earlier.
+
+Why reorder rather than refuse long jobs:
+
+- A multi-day training run is a normal and honest request. Refusing it would turn away real work, and any cut off for "too long" is arbitrary.
+- The delay is capped, so a long job that has waited long enough still goes first. It is slowed, not starved.
+- Short jobs finish and free the machine sooner, so more jobs get through.
+- A job that understates its `--max` to gain order is killed at it.
+
+Trade-offs:
+
+- The delay only changes who starts first. Once a long job runs it holds its share until it ends or reaches its `--max`.
+- A job's `--max` is the agent's own figure. An agent that overstates it only delays itself.
+- A tenth is a rule of thumb, not a measured fit. It is not tuned to any one workload.
+- It is counted in aging, so with `aging_per_minute` at 0 it does nothing.
+
+### Not done yet: a cap on the share long jobs may hold
+
+A few long jobs can fill the machine for days, and short jobs then wait the whole time whatever their priority. The delay does not help once a long job is running. A cap would limit how much of RAM, cores and GPUs jobs with a long `--max` may hold together.
+
+It is deferred. What counts as long, how big the share is and whether it is a config key are not decided. It is tracked in issue #7.
+
 ## Limits stop mistakes, not evasion
 
 The limits are there to catch an honest agent that got an estimate wrong. They are not a sandbox. A job that wants to escape can:
@@ -92,7 +127,9 @@ A session is the unit of visibility, bidding and notification.
 
 ## Notifications
 
-The agent hears about a finished job through a background `proqu wait`. The hooks are a safety net. Prompt and Stop report any outcome the wait did not, and each outcome is reported once. The Stop hook blocks the agent from finishing while a job is unwatched, so a job is not left to run with nobody told.
+The agent hears about a finished job through a background `proqu wait`. The hooks are a safety net. SessionStart, Prompt and Stop report any outcome the wait did not, and each outcome is reported once. Each is worded like the end of a wait, with what to do next and the command for the log. The Stop hook blocks the agent from finishing while a job is unwatched, so a job is not left to run with nobody told. It lists the exact wait and cancel commands for each such job.
+
+A hook ends itself after 8 seconds, inside the 10 second timeout the plugin sets. If the environment file is missing, SessionStart cannot export the session id. It shows the id instead, and says to put it in front of every command.
 
 ## Not supported yet
 
