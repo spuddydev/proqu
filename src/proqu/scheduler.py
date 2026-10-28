@@ -143,6 +143,46 @@ class _Pool:
         return cpu_ids, gpu_ids
 
 
+def _over_limits(req: Request, limits: Limits) -> str | None:
+    if req.ram > limits.ram:
+        return f"needs ram {req.ram}, limit is {limits.ram}"
+    if req.cpus > len(limits.cpu_ids):
+        return f"needs {req.cpus} cpus, limit is {len(limits.cpu_ids)}"
+    if req.gpus > len(limits.gpus):
+        return f"needs {req.gpus} gpus, limit is {len(limits.gpus)}"
+    have = sum(g.vram >= req.vram for g in limits.gpus)
+    if req.gpus > have:
+        return f"needs {req.gpus} gpus with vram {req.vram}, only {have} have that much"
+    return None
+
+
+def _doomed(
+    limits: Limits, live: set[str], ordered: list[Queued], dep_states: dict[str, str]
+) -> dict[str, str]:
+    """Failure reasons for queued jobs that can never start, by id."""
+    reasons = {}
+    for q in ordered:
+        for dep in q.after:
+            state = dep_states.get(dep, "unknown")
+            if dep not in live and state != "succeeded":
+                reasons[q.id] = f"dependency {dep} {state}"
+                break
+        else:
+            reason = _over_limits(q.req, limits)
+            if reason:
+                reasons[q.id] = reason
+    # A job waiting on a job that fails in this pass fails too.
+    changed = True
+    while changed:
+        changed = False
+        for q in ordered:
+            dep = next((d for d in q.after if d in reasons), None)
+            if q.id not in reasons and dep:
+                reasons[q.id] = f"dependency {dep} failed"
+                changed = True
+    return reasons
+
+
 def _reserve(
     pool: _Pool, releases: list[tuple[float, _Held]], req: Request, now: float
 ) -> tuple[float, _Pool] | None:
@@ -167,9 +207,11 @@ def plan(
     now: float,
     aging_per_minute: float,
 ) -> Plan:
-    """Which queued jobs start now and which fail."""
+    """Which queued jobs start now and which fail. Fails are in score order."""
     running = list(running)
     ordered = order(queued, aging_per_minute)
+    live = {r.id for r in running} | {q.id for q in ordered}
+    doomed = _doomed(limits, live, ordered, dep_states)
     pool = _Pool(limits, [(r.req, r.cpu_ids, r.gpu_ids) for r in running])
     releases = [(r.started_at + r.max, (r.req, r.cpu_ids, r.gpu_ids)) for r in running]
     starts = []
@@ -177,6 +219,8 @@ def plan(
     reserved: tuple[float, Request, _Pool] | None = None
     blocked = False
     for q in ordered:
+        if q.id in doomed or any(d in live for d in q.after):
+            continue
         fit = pool.fit(q.req)
         if fit is None:
             if not blocked:
@@ -197,4 +241,4 @@ def plan(
         pool.take(q.req, *fit)
         releases.append((now + q.max, (q.req, *fit)))
         starts.append(Start(q.id, *fit))
-    return Plan(starts, [])
+    return Plan(starts, [Fail(q.id, doomed[q.id]) for q in ordered if q.id in doomed])
