@@ -516,3 +516,43 @@ def test_hook_passes_never_start_gpu_jobs(queue, monkeypatch):
     monkeypatch.delenv("PROQU_JOB_ID")
     assert tick.tick(cached_only=True) == {job.id: "gpu-unread"}
     assert Store().get(job.id).state == "queued"
+
+
+def test_hold_time_is_kept_from_the_first_hold_and_cleared_on_start(queue, monkeypatch):
+    monkeypatch.setattr(machine, "free_ram", lambda: G // 2)
+    job = submit(command=("true",))
+    first = Store().held_since()[job.id]
+    tick.tick()
+    assert Store().held_since() == {job.id: first}
+    monkeypatch.setattr(machine, "free_ram", lambda: 3 * G)
+    tick.tick()
+    assert Store().held_since() == {}
+    assert settle([job.id])[0].state == "succeeded"
+
+
+def test_job_held_past_the_hold_limit_stops_later_jobs(queue, monkeypatch, capsys):
+    monkeypatch.setattr(machine, "free_ram", lambda: 3 * G // 2)
+    big = submit("--ram", "2G", command=("true",))
+    store = Store()
+    with store.locked():
+        store.update(big.id, submitted_at=time.time() - 7200)
+        store.conn.execute("UPDATE held SET since = ?", (time.time() - 3600,))
+    small = submit(command=("true",))
+    assert Store().get(small.id).state == "queued"
+    assert tick.tick() == {big.id: "overdue-ram", small.id: "behind"}
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert "no later job may start ahead of it" in out
+    assert "waiting behind an earlier job that has waited too long" in out
+    monkeypatch.setattr(machine, "free_ram", lambda: 4 * G)
+    tick.tick()
+    assert [job.state for job in settle([big.id, small.id])] == ["succeeded", "succeeded"]
+
+
+def test_unread_gpu_memory_starts_no_hold_clock(queue, monkeypatch):
+    gpu = machine.Machine(ram=4 * G, cpu_ids=CPUS, gpus=(machine.GpuInfo(0, "GPU-a", 8 * G),))
+    monkeypatch.setattr(machine, "snapshot", lambda refresh=False: gpu)
+    monkeypatch.setattr(machine, "free_vram", lambda: None)
+    submit("--gpus", "1", "--vram", "4G", command=("true",))
+    assert Store().held_since() == {}

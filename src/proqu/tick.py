@@ -46,10 +46,12 @@ def tick(store: Store | None = None, cached_only: bool = False) -> dict[str, str
         now = time.time()
         reap(store, now)
         active = store.active()
+        store.forget_held()
+        since = store.held_since()
         inputs = (
             allowed,
             [to_running(job, now) for job in active if job.state != "queued"],
-            [to_queued(job) for job in active if job.state == "queued"],
+            [to_queued(job, since.get(job.id)) for job in active if job.state == "queued"],
             dependency_states(store, active),
             now,
             settings.aging_per_minute,
@@ -62,7 +64,12 @@ def tick(store: Store | None = None, cached_only: bool = False) -> dict[str, str
         if may_start and plan.start:
             starting = {start.id for start in plan.start}
             gpus = not cached_only and any(j.gpus for j in active if j.id in starting)
-            plan = scheduler.plan(*inputs, free=free_memory(active, seen, gpus), share=share)
+            free = free_memory(active, seen, gpus)
+            plan = scheduler.plan(*inputs, free=free, share=share, hold_limit=settings.hold_limit)
+            for job_id, lack in plan.held.items():
+                # an unread GPU says nothing about other programs, so it starts no clock
+                if lack in ("ram", "gpu"):
+                    store.mark_held(job_id, now)
         for fail in plan.fail:
             job = next(j for j in active if j.id == fail.id)
             reason = reserve_reason(request(job), fail.reason, allowed, unreserved)
@@ -70,6 +77,7 @@ def tick(store: Store | None = None, cached_only: bool = False) -> dict[str, str
         if may_start:
             for start in plan.start:
                 begin(store, start)
+        store.forget_held()
         return plan.held
 
 
@@ -148,7 +156,7 @@ def to_running(job: Job, now: float) -> scheduler.Running:
     )
 
 
-def to_queued(job: Job) -> scheduler.Queued:
+def to_queued(job: Job, held_since: float | None = None) -> scheduler.Queued:
     return scheduler.Queued(
         id=job.id,
         req=request(job),
@@ -157,6 +165,7 @@ def to_queued(job: Job) -> scheduler.Queued:
         est=job.est,
         max=job.max,
         after=tuple(job.after),
+        held_since=held_since,
     )
 
 

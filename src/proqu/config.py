@@ -19,6 +19,7 @@ DEFAULTS = {
     "length_delay_cap": 4 * 3600,
     "long_job_after": 12 * 3600,
     "long_job_share": 75,
+    "hold_limit": 30 * 60,
 }
 
 # What an unset reserve means, as shown by `proqu config show`.
@@ -39,6 +40,10 @@ DESCRIPTIONS = {
     "length_delay_cap": "most a long job is delayed in the queue order, 0 for no delay",
     "long_job_after": "max runtime past which a job counts as long for long_job_share",
     "long_job_share": "percent of RAM, cores and GPU memory long jobs may hold together",
+    "hold_limit": (
+        "how long a job waiting for memory other programs use may be passed by later jobs, "
+        "0 to let them always pass"
+    ),
     "kill_grace": "time between the polite and the forced kill, for example 10s",
 }
 
@@ -51,6 +56,7 @@ class Settings:
     length_delay_cap: float
     long_job_after: float
     long_job_share: int
+    hold_limit: float
 
 
 def load(path: Path, validate: bool = True) -> dict:
@@ -188,7 +194,7 @@ def _parse(key: str, text: str, machine: Machine):
         if value < 0:
             raise ValueError("aging_per_minute cannot be negative")
         return value
-    if key == "length_delay_cap":
+    if key in ("length_delay_cap", "hold_limit"):
         return 0 if _is_zero(text, "smhd") else parse_duration(text)
     if key == "long_job_share":
         value = _int(key, text.strip().removesuffix("%"))
@@ -242,7 +248,7 @@ def describe(key: str, value) -> str:
     """A config value as a person would write it."""
     if key in ("ram", "vram", "reserve_ram"):
         return format_size(value)
-    if key in ("kill_grace", "length_delay_cap", "long_job_after"):
+    if key in ("kill_grace", "length_delay_cap", "long_job_after", "hold_limit"):
         return format_duration(value)
     if key == "long_job_share":
         return f"{value}%"

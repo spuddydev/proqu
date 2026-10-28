@@ -655,6 +655,11 @@ def cmd_limits(args, command: list[str]) -> int:
             f"jobs together may hold at most {settings.long_job_share}% of RAM, cores and each "
             "GPU's memory. A larger long job runs only when no other long job is running."
         )
+    if settings.hold_limit:
+        print(
+            "A job waiting for memory other programs are using may be passed by later jobs for "
+            f"{format_duration(settings.hold_limit)}. After that no later job starts until it has."
+        )
     return 0
 
 
