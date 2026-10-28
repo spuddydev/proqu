@@ -1,4 +1,6 @@
 import os
+import subprocess
+import sys
 
 import pytest
 
@@ -68,3 +70,18 @@ def test_whole_log_is_written_raw(home, capsys):
     capsys.readouterr()
     assert main(["logs", job.id, "--tail", "0"]) == 0
     assert capsys.readouterr().out == "10%\r50%\r100%\r\nok�\n"
+
+
+def test_a_closed_pipe_ends_quietly(home):
+    job = submit()
+    paths.log_path(job.id).write_text(("x" * 99 + "\n") * 100_000)
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "proqu", "logs", job.id, "--tail", "0"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    proc.stdout.read(1)
+    proc.stdout.close()
+    err = proc.stderr.read()
+    assert proc.wait(timeout=30) == 141
+    assert err == b""

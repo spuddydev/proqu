@@ -727,6 +727,10 @@ def main(argv: list[str] | None = None) -> int:
     except (LockTimeout, paths.StateDirError, StoreError) as error:
         print(f"proqu: {error}", file=sys.stderr)
         return 1
+    except BrokenPipeError:
+        # the reader went away, as in `proqu logs ID | head`: say nothing, as head would
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 128 + signal.SIGPIPE
     except (OSError, sqlite3.Error) as error:
         print(f"proqu: unexpected error: {error}", file=sys.stderr)
         return 1
