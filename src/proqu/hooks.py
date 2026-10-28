@@ -114,7 +114,10 @@ def session_start(data: dict, session: str) -> dict | None:
     if active:
         lines += ["proqu jobs of this session are still in the queue:"]
         lines += _listed(active, 0)
-        lines += [f"Unless a wait is already running for one, run {_wait_hint(active)}."]
+        if watch.is_watched(session):
+            lines += ["The proqu monitor tells you when each ends, nothing more to run."]
+        else:
+            lines += [f"Unless a wait is already running for one, run {_wait_hint(active)}."]
     return _context("SessionStart", lines)
 
 
