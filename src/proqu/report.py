@@ -16,7 +16,8 @@ class Place:
     """Where a queued job stands: its position and, when known, its projected times.
 
     held says what memory the job waits for when it fits the queue but other
-    programs are using that memory now, as scheduler.Plan.held does. uncertain is
+    programs are using that memory now, or that it waits behind such a job held
+    past the hold limit, as scheduler.Plan.held does. uncertain is
     set when any job waits for memory other programs use, as projections cannot
     foresee other programs.
     """
@@ -81,11 +82,23 @@ WAITING = {
 
 def describe_place(place: Place, now: float) -> str:
     text = f"position {place.position} in the queue"
+    if place.held == "behind":
+        return (
+            f"{text}, waiting behind an earlier job that has waited too long for memory other "
+            "programs are using, so no later job may start until it has. When it starts is "
+            "uncertain"
+        )
     if place.held:
-        waiting = WAITING.get(place.held, WAITING["ram"])
+        lack = place.held.removeprefix("overdue-")
+        waiting = WAITING.get(lack, WAITING["ram"])
+        first = (
+            ". It has waited long enough that no later job may start ahead of it"
+            if lack != place.held
+            else ""
+        )
         return (
             f"{text}, {waiting}. It fits the queue and starts once that memory is free, "
-            "so when it starts is uncertain"
+            f"so when it starts is uncertain{first}"
         )
     if place.start is None or place.end is None:
         return f"{text}, no start time can be projected yet"

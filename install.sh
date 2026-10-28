@@ -73,8 +73,8 @@ main() {
 	version="${PROQU_VERSION:-latest}"
 
 	case "$(uname -s)" in
-	Linux) ;;
-	*) fail "only Linux is supported for now, this is $(uname -s)" ;;
+	Linux | Darwin) ;;
+	*) fail "only Linux and macOS are supported for now, this is $(uname -s)" ;;
 	esac
 
 	command -v python3 >/dev/null 2>&1 || fail "python3 is needed, version 3.10 or newer"

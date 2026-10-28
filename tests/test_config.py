@@ -21,6 +21,7 @@ def test_defaults():
         length_delay_cap=4 * 3600,
         long_job_after=12 * 3600,
         long_job_share=75,
+        hold_limit=30 * 60,
     )
 
 
@@ -170,6 +171,7 @@ def test_settings_read_the_config():
         "length_delay_cap": 60,
         "long_job_after": 7200,
         "long_job_share": 50,
+        "hold_limit": 600,
     }
     assert config.settings(given) == config.Settings(**given)
 
@@ -417,3 +419,27 @@ def test_zero_long_job_after_in_the_file_is_refused(tmp_path):
         config.load(path)
     path.write_text('{"long_job_after": 3600}')
     assert config.load(path) == {"long_job_after": 3600}
+
+
+@pytest.mark.parametrize(("text", "stored"), [("45m", 2700), ("2h", 7200), ("0", 0), ("0s", 0)])
+def test_set_hold_limit(text, stored):
+    assert config.set_value({}, "hold_limit", text, MACHINE) == {"hold_limit": stored}
+
+
+@pytest.mark.parametrize("text", ["off", "30", "-5m"])
+def test_set_hold_limit_refuses_nonsense(text):
+    with pytest.raises(ValueError):
+        config.set_value({}, "hold_limit", text, MACHINE)
+
+
+def test_hold_limit_in_the_file_is_checked(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text('{"hold_limit": 0}')
+    assert config.settings(config.load(path)).hold_limit == 0
+    path.write_text('{"hold_limit": -1}')
+    with pytest.raises(ValueError, match="hold_limit"):
+        config.load(path)
+
+
+def test_describe_hold_limit():
+    assert config.describe("hold_limit", 1800) == "30m"

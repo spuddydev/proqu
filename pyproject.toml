@@ -1,6 +1,6 @@
 [project]
 name = "proqu"
-version = "1.0.0"
+version = "1.1.0"
 description = "A shared compute queue for coding agents"
 readme = "README.md"
 authors = [

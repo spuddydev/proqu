@@ -29,6 +29,8 @@ repos:
     rev: v2.4.3
     hooks:
       - id: codespell
+        # the Linux name of a GPU render node, such as renderD128
+        args: [--ignore-words-list=renderd]
   - repo: local
     hooks:
       - id: pytest

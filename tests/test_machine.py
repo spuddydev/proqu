@@ -1,11 +1,19 @@
 import json
 import multiprocessing
 import os
+import sys
 import time
 
 import pytest
 
-from proqu import machine
+from proqu import machine, paths
+
+# detection on macOS takes its own path, tested with the macOS queries
+LINUX_DETECTION = pytest.mark.skipif(sys.platform == "darwin", reason="Linux detection")
+# macOS has no CPU affinity, so there the CPUs are counted rather than read from it
+AFFINITY = pytest.mark.skipif(
+    not hasattr(os, "sched_getaffinity"), reason="needs CPU affinity, Linux only"
+)
 
 
 def fake_proc(tmp_path, cgroup_line, mem_kib=16 * 1024**2):
@@ -57,11 +65,13 @@ def test_ram_in_private_cgroup_namespace(tmp_path):
     assert machine.detect_ram(proc, root) == 3 * 1024**3
 
 
+@AFFINITY
 def test_cpus_match_affinity(tmp_path):
     proc = fake_proc(tmp_path, "0::/")
     assert machine.detect_cpus(proc, tmp_path / "none") == tuple(sorted(os.sched_getaffinity(0)))
 
 
+@AFFINITY
 def test_cpus_trimmed_by_cgroup_quota(tmp_path):
     proc = fake_proc(tmp_path, "0::/box")
     root = tmp_path / "cg"
@@ -109,6 +119,7 @@ def test_gpus_when_nvidia_smi_missing(tmp_path, monkeypatch):
     assert machine.detect_gpus() == ()
 
 
+@LINUX_DETECTION
 def test_failed_gpu_query_keeps_previous_gpus(tmp_path, monkeypatch):
     fake_nvidia_smi(tmp_path, monkeypatch, "exit 9")
     previous = machine.Machine(1, (0,), (machine.GpuInfo(0, "GPU-aaa", 1024**3),))
@@ -200,6 +211,7 @@ def test_cgroup_v1_reads_only_the_memory_controller(tmp_path):
     assert machine.detect_ram(proc, root) == 2 * 1024**3
 
 
+@AFFINITY
 def test_cpu_quota_trims_a_known_cpu_set(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1, 2, 3, 4, 5, 6, 7})
     proc = fake_proc(tmp_path, "0::/box")
@@ -209,6 +221,7 @@ def test_cpu_quota_trims_a_known_cpu_set(tmp_path, monkeypatch):
     assert machine.detect_cpus(proc, root) == (0, 1, 2)
 
 
+@LINUX_DETECTION
 def test_absent_nvidia_smi_clears_previous_gpus(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))
     previous = machine.Machine(1, (0,), (machine.GpuInfo(0, "GPU-aaa", 1024**3),))
@@ -225,6 +238,7 @@ def test_snapshot_passes_previous_gpus_on(tmp_path, monkeypatch):
     assert seen == [first]
 
 
+@AFFINITY
 def test_cpu_quota_on_cgroup_v1(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1, 2, 3})
     proc = fake_proc(tmp_path, "3:cpu,cpuacct:/box")
@@ -235,6 +249,7 @@ def test_cpu_quota_on_cgroup_v1(tmp_path, monkeypatch):
     assert machine.detect_cpus(proc, tmp_path / "cg") == (0, 1)
 
 
+@AFFINITY
 def test_unlimited_cgroup_v1_cpu_quota(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "sched_getaffinity", lambda pid: {0, 1})
     proc = fake_proc(tmp_path, "3:cpu,cpuacct:/")
@@ -263,6 +278,7 @@ def test_cgroup_path_above_the_mount_reads_the_root(tmp_path):
         {"ram": 1, "cpu_ids": [], "gpus": []},
         {"ram": 1, "cpu_ids": ["0"], "gpus": []},
         {"ram": 1, "cpu_ids": [0], "gpus": [{"index": 0, "uuid": 5, "vram": 1}]},
+        {"ram": 1, "cpu_ids": [0], "gpus": [{"index": 0, "uuid": "u", "vram": 1, "vendor": "x"}]},
     ],
 )
 def test_nonsense_snapshot_is_detected_again(tmp_path, monkeypatch, data):
@@ -311,3 +327,24 @@ def test_free_vram_when_nvidia_smi_fails_or_is_missing(tmp_path, monkeypatch):
     assert machine.free_vram() is None
     monkeypatch.setenv("PATH", str(tmp_path / "empty"))
     assert machine.free_vram() is None
+
+
+def test_snapshot_from_before_vendors_reads_as_nvidia(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path))
+    old = {"ram": 1, "cpu_ids": [0], "gpus": [{"index": 0, "uuid": "GPU-a", "vram": 1}]}
+    paths.machine_path().write_text(json.dumps(old))
+    assert machine.cached().gpus == (machine.GpuInfo(0, "GPU-a", 1, "nvidia"),)
+
+
+def test_apple_silicon_offers_one_gpu_that_uses_the_ram(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "sysctl").write_text("#!/bin/sh\necho 'Apple M2 Max'\n")
+    (bin_dir / "sysctl").chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    monkeypatch.setattr(machine.platform, "machine", lambda: "arm64")
+    assert machine.apple_gpus() == (machine.GpuInfo(0, "apple-m2-max", 0, "apple"),)
+    (bin_dir / "sysctl").write_text("#!/bin/sh\nexit 1\n")
+    assert machine.apple_gpus() == (machine.GpuInfo(0, "apple-gpu", 0, "apple"),)
+    monkeypatch.setattr(machine.platform, "machine", lambda: "x86_64")
+    assert machine.apple_gpus() == ()

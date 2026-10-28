@@ -39,9 +39,9 @@ A multi-day training run is a normal queue job. Give it an honest `--max`, and e
 
 Every request has to be right, because the queue plans around it and enforces it.
 
-- `--ram`: peak resident memory of the whole job, children included. Measure it on a small run with `/usr/bin/time -v CMD` (Maximum resident set size) or by watching it, then scale up. A little over is safer than being killed, but large overestimates keep others waiting.
-- `--cpus`: cores the job will really keep busy, for example the `-j` of a build or the worker count of a data loader. Not the core count of the machine.
-- `--gpus` and `--vram`: number of GPUs and memory needed on each, as `nvidia-smi` reports it during a short run. Give both together, the CLI rejects one without the other. A job that asked for no GPU is killed if it touches one, so set these whenever the code may use CUDA.
+- `--ram`: peak resident memory of the whole job, children included. Measure it on a small run with `/usr/bin/time -v CMD` (Maximum resident set size), `/usr/bin/time -l CMD` on macOS, or by watching it, then scale up. A little over is safer than being killed, but large overestimates keep others waiting.
+- `--cpus`: cores the job will really keep busy, for example the `-j` of a build or the worker count of a data loader. Not the core count of the machine. On macOS this is not enforced, so run the job with that many threads.
+- `--gpus` and `--vram`: number of GPUs and memory needed on each, as `nvidia-smi` reports it during a short run. Give both together, the CLI rejects one without the other. A job that asked for no GPU is killed if it touches one, so set these whenever the code may use CUDA or ROCm. On AMD, measure with `amd-smi` and read `ROCR_VISIBLE_DEVICES` to see the GPUs the job was given. On an Apple silicon Mac the GPU shares the RAM, so ask for it with `--gpus 1` and no `--vram`, and count its memory in `--ram`. Only one job holds it at a time.
 - `--est`: your honest expected runtime. The queue uses it to plan and to show projected start times.
 - `--max`: a generous overestimate, about 1.5 to 3 times `--est`. The job is killed when it reaches max, so a hang cannot hold resources forever. Too tight and a slow run is lost, too loose and it blocks planning.
 
@@ -71,7 +71,7 @@ A job under the limits can still wait for memory that other programs are using. 
 
 Other commands:
 
-- `proqu status [ID] [--all]`: your jobs with queue position, projected start and finish, time left, outcomes and your bid budget. A job held for memory other programs use says "waiting for memory other programs are using" and its start time is uncertain. Cancel it if it waits too long. `--all` includes every finished job.
+- `proqu status [ID] [--all]`: your jobs with queue position, projected start and finish, time left, outcomes and your bid budget. A job held for memory other programs use says "waiting for memory other programs are using" and its start time is uncertain. Cancel it if it waits too long. Once it has waited past the hold limit, 30 minutes by default, later jobs wait behind it, say "waiting behind an earlier job that has waited too long" and start only after it. `--all` includes every finished job.
 - `proqu logs ID [--tail N]`: the job's output so far.
 - `proqu cancel ID`: stop a job you no longer need. Do this rather than leaving it queued.
 - `proqu limits`: what the queue may use on this machine.
