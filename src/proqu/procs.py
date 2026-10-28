@@ -62,9 +62,17 @@ def job_members(job_id: str, session: int | None) -> list[int]:
     A process may leave the job's session with setsid, but it keeps the
     PROQU_JOB_ID it inherited, so it is still found.
     """
-    marker = f"PROQU_JOB_ID={job_id}".encode()
+    return members_of({job_id: session})[job_id]
+
+
+def members_of(jobs: dict[str, int | None]) -> dict[str, list[int]]:
+    """The live processes of several jobs, given as job id to session, in one look at /proc."""
+    markers = {f"PROQU_JOB_ID={job_id}".encode(): job_id for job_id in jobs}
+    sessions = {session: job_id for job_id, session in jobs.items() if session is not None}
+    found: dict[str, list[int]] = {job_id: [] for job_id in jobs}
+    if not jobs:
+        return found
     uid = os.getuid()
-    members = []
     for name in os.listdir("/proc"):
         if not name.isdigit():
             continue
@@ -75,12 +83,14 @@ def job_members(job_id: str, session: int | None) -> list[int]:
             fields = _stat_fields(pid)
             if not fields or fields[0] in ("Z", "X"):
                 continue
-            if session is not None and int(fields[3]) == session:
-                members.append(pid)
-                continue
-            with open(f"/proc/{pid}/environ", "rb") as handle:
-                if marker in handle.read().split(b"\0"):
-                    members.append(pid)
+            owner = sessions.get(int(fields[3]))
+            if owner is None:
+                with open(f"/proc/{pid}/environ", "rb") as handle:
+                    owner = next(
+                        (markers[e] for e in handle.read().split(b"\0") if e in markers), None
+                    )
+            if owner is not None:
+                found[owner].append(pid)
         except OSError:
             continue
-    return members
+    return found

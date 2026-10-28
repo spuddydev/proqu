@@ -5,13 +5,15 @@ Contract with the caller:
 - dep_states maps ids of dependencies that are neither running nor queued to their
   terminal state. A missing id counts as unknown.
 - gpu_ids are Gpu.index values. Limits are already lowered by config.
+- free, when given, is the memory free right now for new jobs. It only ever holds a
+  job back. Reservations, backfill and projections stay on the limits alone.
 """
 
 from __future__ import annotations
 
 import copy
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from proqu.units import format_size
 
@@ -74,9 +76,23 @@ class Fail:
 
 
 @dataclass(frozen=True)
+class Free:
+    """Memory free now for new jobs, net of what running jobs may still grow into.
+
+    vram maps GPU index to free bytes. None means it could not be read, and then
+    no job that needs a GPU starts.
+    """
+
+    ram: int
+    vram: dict[int, int] | None = None
+
+
+@dataclass(frozen=True)
 class Plan:
     start: list[Start]
     fail: list[Fail]
+    # jobs that fit the limits but not the memory free now, by id, with what they lack
+    held: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -137,12 +153,21 @@ class _Pool:
             if g in self.vram:
                 self.vram[g] += req.vram
 
-    def fit(self, req: Request) -> tuple[tuple[int, ...], tuple[int, ...]] | None:
-        """The cpu ids and GPU indices the request would get now, or None."""
+    def fit(
+        self, req: Request, vram_free: dict[int, int] | None = None
+    ) -> tuple[tuple[int, ...], tuple[int, ...]] | None:
+        """The cpu ids and GPU indices the request would get now, or None.
+
+        With vram_free, only GPUs that also have that much memory free are used.
+        """
         if req.ram > self.ram or req.cpus > len(self.cpus):
             return None
         # Best fit: the GPUs with the least free vram that still hold the request.
-        free = sorted((v, g) for g, v in self.vram.items() if v >= req.vram)
+        free = sorted(
+            (v, g)
+            for g, v in self.vram.items()
+            if v >= req.vram and (vram_free is None or vram_free.get(g, 0) >= req.vram)
+        )
         if len(free) < req.gpus:
             return None
         cpu_ids = tuple(sorted(self.cpus)[: req.cpus])
@@ -212,6 +237,40 @@ def _reserve(
     return None
 
 
+_Reserved = tuple[float, Request, _Pool]
+
+
+def _after(
+    reserved: _Reserved | None, now: float, q: Queued, fit: tuple[tuple[int, ...], tuple[int, ...]]
+) -> tuple[bool, _Reserved | None]:
+    """Whether q may start with fit, and the reservation once it has.
+
+    A job that runs past the reserved start must leave room for the reserved job.
+    """
+    if not reserved or now + q.max <= reserved[0]:
+        return True, reserved
+    at, req, shadow = reserved
+    shadow = shadow.copy()
+    shadow.take(q.req, *fit)
+    if shadow.fit(req) is None:
+        return False, reserved
+    return True, (at, req, shadow)
+
+
+def _live_fit(
+    pool: _Pool, req: Request, ram: int, vram: dict[int, int] | None
+) -> tuple[str | None, tuple[tuple[int, ...], tuple[int, ...]] | None]:
+    """What memory a job lacks now, "ram", "gpu" or "gpu-unread", else None and where it fits."""
+    if req.ram > ram:
+        return "ram", None
+    if not req.gpus:
+        return None, pool.fit(req)
+    fit = pool.fit(req, vram) if vram is not None else None
+    if fit is None:
+        return ("gpu" if vram is not None else "gpu-unread"), None
+    return None, fit
+
+
 def plan(
     limits: Limits,
     running: Iterable[Running],
@@ -220,8 +279,14 @@ def plan(
     now: float,
     aging_per_minute: float,
     delay_cap: float = 0,
+    free: Free | None = None,
 ) -> Plan:
-    """Which queued jobs start now and which fail. Fails are in score order."""
+    """Which queued jobs start now, which fail and which wait for free memory.
+
+    Fails are in score order. A job held for free memory counts as blocked, so when
+    it is the first blocked job its place is reserved from now and later jobs may
+    only start if they leave room for it.
+    """
     running = list(running)
     ordered = order(queued, aging_per_minute, delay_cap)
     live = {r.id for r in running} | {q.id for q in ordered}
@@ -230,8 +295,11 @@ def plan(
     releases = [(r.started_at + r.max, (r.req, r.cpu_ids, r.gpu_ids)) for r in running]
     starts = []
     # The first blocked job: its reserved start, its request and the pool at that time.
-    reserved: tuple[float, Request, _Pool] | None = None
+    reserved: _Reserved | None = None
     blocked = False
+    held: dict[str, str] = {}
+    free_ram = free.ram if free else 0
+    free_vram = dict(free.vram) if free and free.vram is not None else None
     for q in ordered:
         if q.id in doomed or any(d in live for d in q.after):
             continue
@@ -244,18 +312,32 @@ def plan(
                 if found:
                     reserved = (found[0], q.req, found[1])
             continue
-        if reserved and now + q.max > reserved[0]:
-            # Runs past the reservation, so it must leave room for the reserved job.
-            at, req, shadow = reserved
-            shadow = shadow.copy()
-            shadow.take(q.req, *fit)
-            if shadow.fit(req) is None:
+        may, after = _after(reserved, now, q, fit)
+        if not may:
+            continue
+        if free is not None:
+            lacking, live_fit = _live_fit(pool, q.req, free_ram, free_vram)
+            if lacking or live_fit is None:
+                held[q.id] = lacking or "gpu"
+                if not blocked:
+                    blocked = True
+                    reserved = (now, q.req, pool.copy())
                 continue
-            reserved = (at, req, shadow)
+            # the free memory may pick other GPUs, which must leave room as well
+            fit = live_fit
+            may, after = _after(reserved, now, q, fit)
+            if not may:
+                continue
+            free_ram -= q.req.ram
+            for g in fit[1]:
+                if free_vram is not None:
+                    free_vram[g] = free_vram.get(g, 0) - q.req.vram
+        reserved = after
         pool.take(q.req, *fit)
         releases.append((now + q.max, (q.req, *fit)))
         starts.append(Start(q.id, *fit))
-    return Plan(starts, [Fail(q.id, doomed[q.id]) for q in ordered if q.id in doomed])
+    fails = [Fail(q.id, doomed[q.id]) for q in ordered if q.id in doomed]
+    return Plan(starts, fails, held)
 
 
 def project(

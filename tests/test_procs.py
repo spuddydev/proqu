@@ -60,3 +60,18 @@ def test_job_members_by_session_and_by_marker():
         for child in (leader, marked):
             child.kill()
             child.wait()
+
+
+def test_members_of_several_jobs_in_one_look():
+    first = subprocess.Popen(["sleep", "5"], start_new_session=True)
+    env = dict(os.environ, PROQU_JOB_ID="second")
+    second = subprocess.Popen(["sleep", "5"], env=env, start_new_session=True)
+    try:
+        time.sleep(0.2)
+        found = procs.members_of({"first": first.pid, "second": None, "third": None})
+        assert found == {"first": [first.pid], "second": [second.pid], "third": []}
+        assert procs.members_of({}) == {}
+    finally:
+        for child in (first, second):
+            child.kill()
+            child.wait()
