@@ -26,6 +26,10 @@ def lock_path() -> Path:
     return state_dir() / "lock"
 
 
+def machine_path() -> Path:
+    return state_dir() / "machine.json"
+
+
 def config_path() -> Path:
     return state_dir() / "config.json"
 
