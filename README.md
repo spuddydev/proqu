@@ -36,7 +36,7 @@ epoch 40 done, val loss 0.183
 ## Why proqu
 
 - **Built for agents, not people.** Every message, refusal and kill reason is written for an agent to act on. The bundled skill teaches the agent when to queue, how to estimate, and how to read the outcome.
-- **Wakes the agent when its job ends.** Success, failure, a kill or a failed dependency all reach the agent with the reason and the end of the log. Hooks catch any job the agent forgot to wait on.
+- **Wakes the agent when its job ends.** Success, failure, a kill or a failed dependency all reach the agent with the reason and the end of the log. Hooks remind the agent of any job it forgot to wait on.
 - **Packs the machine.** Jobs start in priority order, and smaller jobs backfill the gaps without ever delaying the big job at the front.
 - **Hard limits.** RAM and CPU are enforced by the kernel through cgroups where it can, and by a watch and kill fallback where it cannot. A job is killed at its maximum runtime, so a hang never holds the machine.
 - **Fair by default.** With no bids it is plain first in, first out. Agents can bid for urgency from a small budget, and every job gains priority as it waits, so nothing starves.
@@ -51,7 +51,7 @@ Linux and Python 3.10 or newer.
 curl -fsSL https://raw.githubusercontent.com/spuddydev/proqu/main/install.sh | sh
 ```
 
-This puts proqu in `~/.local/share/proqu`, links the `proqu` command into `~/.local/bin`, and installs the Claude Code plugin from that same folder. Restart Claude Code and every session has the skill, the hooks and the command. Run the same line again to update.
+This puts proqu in `~/.local/share/proqu`, links the `proqu` command into `~/.local/bin`, and installs the Claude Code plugin from that same folder, so you and your agents always run the same release. Restart Claude Code and every session has the skill, the hooks and the command. Run the same line again to update.
 
 <details>
 <summary>Install options</summary>
@@ -73,9 +73,9 @@ curl -fsSL https://raw.githubusercontent.com/spuddydev/proqu/main/install.sh | P
 <summary>Install by hand, or from a clone</summary>
 
 ```sh
-git clone https://github.com/spuddydev/proqu ~/.local/share/proqu
-ln -s ~/.local/share/proqu/bin/proqu ~/.local/bin/proqu
-claude plugin marketplace add ~/.local/share/proqu
+git clone https://github.com/spuddydev/proqu ~/proqu
+ln -s ~/proqu/bin/proqu ~/.local/bin/proqu
+claude plugin marketplace add ~/proqu
 claude plugin install proqu@proqu
 ```
 
@@ -88,7 +88,7 @@ claude plugin install proqu@proqu
 claude plugin uninstall proqu@proqu
 claude plugin marketplace remove proqu
 rm -rf ~/.local/share/proqu ~/.local/bin/proqu
-rm -rf ~/.local/state/proqu   # the queue's state and job logs
+rm -rf ~/.local/state/proqu   # the queue's state and job logs, if you kept the default place
 ```
 
 </details>
@@ -102,7 +102,10 @@ What the queue may use on this machine:
   CPUs: 5 (of 6, after the reserve)
   GPUs: none
 RAM and CPU are enforced by the kernel: each job runs in its own cgroup. GPU use is watched every few seconds.
-Kept in reserve for services and interactive work: 1.5G RAM and 1 CPU core.
+Kept in reserve for services and interactive work: 1.5G RAM and 1 CPU core. Only the machine's owner should change it, with reserve_ram and reserve_cpus in `proqu config`.
+Each session may bid up to 11000 points in total.
+Every queued job gains 10 priority points per minute.
+A long job counts as submitted later by a tenth of its --max, at most 4h, so shorter jobs tend to go first.
 ```
 
 ## How it works
@@ -142,9 +145,11 @@ Bid budget: 11000 of 11000 left for this session.
 
 A job that goes over what it asked for is stopped, and the agent is told it was the job's fault and what to change:
 
-```
-Job 20a7c2 (hog) killed after 1s: used more than its RAM limit of 300.0M (peak 804.7M):
-this was the job's own limit, reduce its memory use or resubmit with a larger --ram if it truly needs it
+```console
+$ proqu wait 5990db
+Job 5990db (hog) killed after 0s: used more than its RAM limit of 300.0M (stopped by the kernel): this was the job's own limit, reduce its memory use or resubmit with a larger --ram if it truly needs it
+Ended by signal SIGKILL, peak RAM 300.0M.
+Next: the job broke its own limit, not the queue's. Find out why from the log before resubmitting, and raise its request only if it truly needs more.
 ```
 
 ## What belongs in the queue
@@ -166,7 +171,7 @@ Agents use proqu. The owner sets its limits:
 ```sh
 proqu config                    # show the settings
 proqu config set ram 24G        # let the queue use at most 24G
-proqu config set gpus 0         # only GPU 0
+proqu config set gpus 0         # only GPU 0, on a machine with GPUs
 proqu config set reserve_ram 4G # keep 4G back for everything else
 ```
 
@@ -185,12 +190,12 @@ Limits can only be lowered below what the machine has. Every key is in the [guid
 - [x] Claude Code plugin with wake on finish
 - [ ] Start jobs only when memory is really free, for machines shared with other users
 - [ ] A cap on the share long jobs may hold ([#7](https://github.com/spuddydev/proqu/issues/7))
-- [ ] macOS
-- [ ] AMD GPUs
+- [ ] macOS ([#13](https://github.com/spuddydev/proqu/issues/13))
+- [ ] AMD GPUs ([#14](https://github.com/spuddydev/proqu/issues/14))
 
 ## Contributing
 
-Issues and pull requests are welcome. Work lands on `dev`, which is merged into `main` for each release.
+Issues and pull requests are welcome. Work lands on `dev`, which is merged into `main` for each release. To try changes in Claude Code, add your clone with `claude plugin marketplace add`. The installer leaves a plugin added that way alone.
 
 ```sh
 uv sync                                        # set up
