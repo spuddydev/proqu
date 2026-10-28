@@ -4,6 +4,7 @@ The supervisor asks its monitor about the job once a poll. A monitor answers
 with the reason the job must be stopped, or None while it is within limits.
 """
 
+import contextlib
 import json
 import os
 import resource
@@ -233,8 +234,9 @@ def cgroups_available() -> bool:
 
 
 def mark_unavailable() -> None:
-    """Stop using cgroups for a day after systemd-run failed for a job."""
-    _remember(False)
+    """Forget the probe result after systemd-run failed for a job, so the next job probes again."""
+    with contextlib.suppress(OSError):
+        (paths.state_dir() / "cgroups.json").unlink()
 
 
 def _remember(ok: bool) -> None:

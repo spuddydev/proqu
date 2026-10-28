@@ -117,9 +117,16 @@ def test_probe_result_is_cached(home, monkeypatch):
     monkeypatch.setattr(limits, "_probe", lambda: calls.append(1) or True)
     assert limits.cgroups_available() and limits.cgroups_available()
     assert calls == [1]
+
+
+def test_a_failed_launch_makes_the_next_job_probe_again(home, monkeypatch):
+    monkeypatch.setattr(limits, "cgroups_available", REAL_PROBE)
+    calls = []
+    monkeypatch.setattr(limits, "_probe", lambda: calls.append(1) or True)
+    assert limits.cgroups_available()
     limits.mark_unavailable()
-    assert not limits.cgroups_available()
-    assert calls == [1]
+    assert limits.cgroups_available()
+    assert calls == [1, 1]
 
 
 def fake_nvidia_smi(tmp_path, monkeypatch, line):
