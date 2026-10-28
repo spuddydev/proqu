@@ -178,8 +178,10 @@ def _parse(key: str, text: str, machine: Machine):
         if value < 0:
             raise ValueError("aging_per_minute cannot be negative")
         return value
+    if key == "length_delay_cap":
+        return 0 if text.strip() == "0" else parse_duration(text)
     if text.strip() == "0":
-        return 0
+        raise ValueError(f"{key} must be more than zero")
     return parse_duration(text)
 
 

@@ -338,6 +338,12 @@ def test_set_length_delay_cap(text, stored):
     assert config.set_value({}, "length_delay_cap", text, MACHINE) == {"length_delay_cap": stored}
 
 
+@pytest.mark.parametrize("text", ["0", "0s"])
+def test_set_kill_grace_refuses_zero(text):
+    with pytest.raises(ValueError, match="more than zero"):
+        config.set_value({}, "kill_grace", text, MACHINE)
+
+
 def test_set_length_delay_cap_refuses_nonsense():
     with pytest.raises(ValueError, match="cannot read duration"):
         config.set_value({}, "length_delay_cap", "long", MACHINE)
