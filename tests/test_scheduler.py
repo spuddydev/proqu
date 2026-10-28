@@ -793,6 +793,11 @@ def test_jobs_ahead_of_an_overdue_job_still_start():
     assert p.held == {"big": "overdue-ram", "small": "behind"}
 
 
+def test_a_job_held_exactly_the_hold_limit_may_still_be_passed():
+    queued = [held_q("big", 6, 1, NOW - 1800), q("small", ram=1, t=2)]
+    assert started(hold_run(queued, Free(3 * G))) == ["small"]
+
+
 def test_a_hold_limit_of_zero_never_stops_later_jobs():
     queued = [held_q("big", 6, 1, NOW - 86_400), q("small", ram=1, t=2)]
     assert started(hold_run(queued, Free(3 * G), hold_limit=0)) == ["small"]
