@@ -1,8 +1,10 @@
+import json
 import os
 import select
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 import pytest
 
@@ -158,3 +160,26 @@ def test_watch_is_not_listed_in_the_help(capsys):
     with pytest.raises(SystemExit):
         main(["--help"])
     assert "watch" not in capsys.readouterr().out
+
+
+def test_a_report_is_one_line_even_when_the_reason_is_not(home):
+    job = add("failed", reason="could not start its supervisor: first\nsecond")
+    assert "\n" not in watch.line(Store().get(job.id))
+
+
+def test_the_plugin_runs_the_watch_as_a_monitor():
+    root = Path(__file__).resolve().parent.parent
+    (monitor,) = json.loads((root / "monitors" / "monitors.json").read_text())
+    assert monitor["name"] and monitor["description"]
+    assert monitor["command"] == '"${CLAUDE_PLUGIN_ROOT}/bin/proqu" watch'
+
+
+def test_a_job_a_hook_reported_meanwhile_is_not_repeated(home, capsys, monkeypatch):
+    job = add("succeeded")
+    store = Store()
+    stale = store.for_session(SESSION)
+    with store.locked():
+        store.update(job.id, notified=True)
+    monkeypatch.setattr(store, "for_session", lambda session: stale)
+    watch.report_ended(store, SESSION)
+    assert capsys.readouterr().out == ""

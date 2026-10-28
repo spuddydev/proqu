@@ -77,7 +77,8 @@ def line(job) -> str:
     # imported here, as the hooks use this module
     from proqu import hooks
 
-    return "proqu:" + hooks._describe(job, time.time()).removeprefix("-")
+    text = "proqu:" + hooks._describe(job, time.time()).removeprefix("-")
+    return " ".join(text.split())
 
 
 def report_ended(store: Store, session: str) -> None:
@@ -87,8 +88,11 @@ def report_ended(store: Store, session: str) -> None:
     """
     ended = [j for j in store.for_session(session) if j.state in TERMINAL and not j.notified]
     for job in sorted(ended, key=lambda j: j.ended_at or 0):
-        print(line(job), flush=True)
+        # claimed under the lock, so a hook reporting it meanwhile is not repeated
         with store.locked():
+            if store.get(job.id).notified:
+                continue
+            print(line(job), flush=True)
             store.update(job.id, notified=True)
 
 
