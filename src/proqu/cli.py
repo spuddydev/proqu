@@ -68,6 +68,7 @@ def queue_outlook(
         settings.length_delay_cap,
         now,
         held,
+        ticking.share_of(settings),
     )
 
 
