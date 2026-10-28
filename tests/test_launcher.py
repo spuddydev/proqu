@@ -58,3 +58,13 @@ def test_plugin_version_matches_the_package():
     manifest = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())
     pyproject = (ROOT / "pyproject.toml").read_text()
     assert f'version = "{manifest["version"]}"' in re.findall(r'^version = ".*"$', pyproject, re.M)
+
+
+def test_launcher_refuses_an_old_python():
+    code = (
+        "import sys; sys.version_info = (3, 9, 0); "
+        f"exec(compile(open({str(LAUNCHER)!r}).read(), 'proqu', 'exec'))"
+    )
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "proqu needs Python 3.10 or newer" in result.stderr
