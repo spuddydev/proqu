@@ -7,7 +7,6 @@ how it ended and then lets the queue move on.
 
 import contextlib
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -182,10 +181,20 @@ def _check_runnable(job: Job) -> None:
         raise FileNotFoundError(2, "No such directory", job.cwd)
     program = job.argv[0]
     if "/" in program:
-        if not os.access(os.path.join(job.cwd, program), os.X_OK):
-            raise FileNotFoundError(2, "No such file or directory", program)
-    elif not shutil.which(program, path=job.env.get("PATH", "")):
-        raise FileNotFoundError(2, "No such file or directory", program)
+        candidates = [os.path.join(job.cwd, program)]
+    else:
+        # a job with no PATH is searched for the way the system would, in the default path
+        search = job.env.get("PATH", os.defpath)
+        candidates = [os.path.join(folder or ".", program) for folder in search.split(os.pathsep)]
+    denied = False
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            if os.access(candidate, os.X_OK):
+                return
+            denied = True
+    if denied:
+        raise PermissionError(13, "Permission denied", program)
+    raise FileNotFoundError(2, "No such file or directory", program)
 
 
 def launch(job: Job, log, argv: list[str]) -> subprocess.Popen:
