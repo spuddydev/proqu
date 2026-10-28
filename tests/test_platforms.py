@@ -173,6 +173,27 @@ def test_amd_job_without_a_gpu_sees_none(amd_box):
     assert log_of(job).strip() == "[-1] [-1] [-1]"
 
 
+def test_amd_gpu_use_is_watched_and_named_for_amd(amd_box, monkeypatch):
+    job = amd_job(env=dict(os.environ), gpus=1, vram=G, gpu_ids=[0])
+    monitor = limits.Monitor(job, os.getpid(), ("GPU-00000000000000aa",))
+    assert monitor.watch_gpus
+    breach = limits.gpu_breach(job, ("GPU-00000000000000aa",), [(1, "AMD-2", 5)], "amd")
+    assert breach[1].endswith("use the GPUs in ROCR_VISIBLE_DEVICES only")
+    breach = limits.gpu_breach(job, ("GPU-00000000000000aa",), [(1, "GPU-00000000000000aa", 2 * G)])
+    assert "measure it with nvidia-smi" in breach[1]
+    breach = limits.gpu_breach(
+        job, ("GPU-00000000000000aa",), [(1, "GPU-00000000000000aa", 2 * G)], "amd"
+    )
+    assert "measure it with amd-smi or rocm-smi" in breach[1]
+
+
+def test_amd_queries_go_to_sysfs(amd_box, monkeypatch):
+    monkeypatch.setattr(amd, "apps", lambda: [(5, "AMD-2", 3)])
+    monkeypatch.setattr(amd, "free_vram", lambda: {0: G, 2: 2 * G})
+    assert limits.gpu_apps() == [(5, "AMD-2", 3)]
+    assert machine.free_vram() == {0: G, 2: 2 * G}
+
+
 def test_apple_gpu_is_not_watched_and_has_no_variable(home, monkeypatch):
     apple = machine.Machine(16 * G, (0, 1), (machine.GpuInfo(0, "apple-m2", 0, "apple"),))
     monkeypatch.setattr(machine, "snapshot", lambda refresh=False: apple)

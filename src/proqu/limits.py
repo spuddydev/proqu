@@ -24,7 +24,7 @@ import threading
 import time
 from pathlib import Path
 
-from proqu import darwin, machine, paths, procs
+from proqu import amd, darwin, machine, paths, procs
 from proqu.store import Job
 from proqu.units import format_size
 
@@ -41,6 +41,10 @@ GPU_BACKOFF_MAX = 60.0
 SCOPE_VARS = ("XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS")
 
 OWN_LIMIT = "this was the job's own limit"
+
+# how each vendor's jobs are told which GPUs are theirs, and how to measure their use
+VISIBLE = {"nvidia": "CUDA_VISIBLE_DEVICES", "amd": "ROCR_VISIBLE_DEVICES"}
+MEASURE = {"nvidia": "nvidia-smi", "amd": "amd-smi or rocm-smi"}
 
 
 def ram_reason(limit: int, peak: int) -> str:
@@ -62,7 +66,9 @@ class Monitor:
         self.peak = 0
         self.vendor = machine.gpu_vendor()
         # a GPU that uses the RAM shows its memory in the RAM, and cannot be told apart per job
-        if self.vendor == "apple":
+        if self.vendor == "amd":
+            self.watch_gpus = True
+        elif self.vendor == "apple":
             self.watch_gpus = False
         else:
             self.watch_gpus = shutil.which("nvidia-smi") is not None
@@ -93,7 +99,8 @@ class Monitor:
             self.gpu_query_failed = True
             return None
         members = set(procs.job_members(self.job.id, self.session))
-        return gpu_breach(self.job, self.gpu_uuids, [app for app in apps if app[0] in members])
+        mine = [app for app in apps if app[0] in members]
+        return gpu_breach(self.job, self.gpu_uuids, mine, self.vendor or "nvidia")
 
     def kill_all(self) -> None:
         """Stop anything of the job the process list missed. Only a cgroup can do this."""
@@ -112,6 +119,7 @@ def gpu_breach(
     job: Job,
     assigned: tuple[str, ...],
     apps: list[tuple[int, str, int | None]],
+    vendor: str = "nvidia",
 ) -> tuple[str, str] | None:
     """Why the job's GPU use breaks its request, given its processes on GPUs."""
     if not apps:
@@ -126,21 +134,25 @@ def gpu_breach(
         if uuid not in assigned:
             return "killed", (
                 f"used GPU {uuid}, which was not given to it: {OWN_LIMIT}, "
-                "use the GPUs in CUDA_VISIBLE_DEVICES only"
+                f"use the GPUs in {VISIBLE.get(vendor, VISIBLE['nvidia'])} only"
             )
         used[uuid] = used.get(uuid, 0) + (memory or 0)
     worst = max(used.values())
     if worst > job.vram:
         return "killed", (
             f"used {format_size(worst)} of GPU memory, more than its --vram of "
-            f"{format_size(job.vram)}: {OWN_LIMIT}, measure it with nvidia-smi and resubmit"
+            f"{format_size(job.vram)}: {OWN_LIMIT}, measure it with "
+            f"{MEASURE.get(vendor, MEASURE['nvidia'])} and resubmit"
         )
     return None
 
 
 def gpu_apps() -> list[tuple[int, str, int | None]] | None:
     """Processes using GPUs as (pid, GPU uuid, bytes), or None if the query failed."""
-    if machine.gpu_vendor() == "apple":
+    vendor = machine.gpu_vendor()
+    if vendor == "amd":
+        return amd.apps()
+    if vendor == "apple":
         # no process can be seen using it, its memory is counted in the RAM
         return []
     try:
