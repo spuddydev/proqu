@@ -191,6 +191,23 @@ def test_queued_submit_shows_its_place(home, capsys):
     assert "Position 2 in the queue, expected to start in 1m and finish in 2m." in out
 
 
+def test_a_long_max_says_it_counts_as_submitted_later(home, capsys):
+    assert submit("--cpus", "4", "--max", "10h") == 0
+    assert "Long max runtime: counts as submitted 1h later." in capsys.readouterr().out
+    assert submit("--cpus", "4", "--max", "100h") == 0
+    assert "counts as submitted 4h later." in capsys.readouterr().out
+
+
+def test_a_short_max_or_no_delay_says_nothing_of_it(home, capsys):
+    main(["config", "set", "length_delay_cap", "0"])
+    assert submit("--cpus", "4", "--max", "10h") == 0
+    assert "Long max runtime" not in capsys.readouterr().out
+    main(["config", "unset", "length_delay_cap"])
+    main(["config", "set", "aging_per_minute", "0"])
+    assert submit("--cpus", "4", "--max", "10h") == 0
+    assert "Long max runtime" not in capsys.readouterr().out
+
+
 def test_place_never_shows_other_sessions(home, capsys, monkeypatch):
     monkeypatch.setenv("PROQU_SESSION", "s2")
     assert submit("--cpus", "4", "--name", "theirs", "--bid", "77") == 0

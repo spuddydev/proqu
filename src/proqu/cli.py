@@ -154,6 +154,9 @@ def cmd_submit(args, command: list[str]) -> int:
     if after:
         print(f"Waits for: {', '.join(after)}.")
     if now.state == "queued":
+        delay = min(max_time / 10, settings.length_delay_cap) if settings.aging_per_minute else 0
+        if delay > 0:
+            print(f"Long max runtime: counts as submitted {format_duration(round(delay))} later.")
         # the job is queued already, so a failed estimate must not fail the submit
         with contextlib.suppress(ProquError, OSError, sqlite3.Error):
             when = time.time()
