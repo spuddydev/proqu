@@ -256,3 +256,31 @@ def test_new_id_skips_taken_ids(store, monkeypatch):
     ids = iter(["aaaaaa", "bbbbbb"])
     monkeypatch.setattr(store_module.secrets, "token_hex", lambda n: next(ids))
     assert store.new_id() == "bbbbbb"
+
+
+def test_first_release_database_is_brought_up_to_date(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path))
+    store = Store()
+    job = make_job(store)
+    store.insert(job)
+    store.close()
+    conn = sqlite3.connect(tmp_path / "proqu.db")
+    conn.execute("DROP TABLE held")
+    conn.execute("PRAGMA user_version = 1")
+    conn.close()
+    store = Store()
+    assert store.conn.execute("PRAGMA user_version").fetchone()[0] == store_module.SCHEMA_VERSION
+    assert store.get(job.id) == job
+    store.mark_held(job.id, 5.0)
+    assert store.held_since() == {job.id: 5.0}
+
+
+def test_held_time_keeps_the_first_and_is_forgotten_once_not_queued(store):
+    queued, started = make_job(store), make_job(store, state="running")
+    store.insert(queued)
+    store.insert(started)
+    store.mark_held(queued.id, 1.0)
+    store.mark_held(queued.id, 2.0)
+    store.mark_held(started.id, 1.0)
+    store.forget_held()
+    assert store.held_since() == {queued.id: 1.0}
