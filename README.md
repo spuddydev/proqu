@@ -38,7 +38,7 @@ epoch 40 done, val loss 0.183
 - **Built for agents, not people.** Every message, refusal and kill reason is written for an agent to act on. The bundled skill teaches the agent when to queue, how to estimate, and how to read the outcome.
 - **Wakes the agent when its job ends.** Success, failure, a kill or a failed dependency all reach the agent with the reason and the end of the log. Hooks remind the agent of any job it forgot to wait on.
 - **Packs the machine.** Jobs start in priority order, and smaller jobs backfill the gaps without ever delaying the big job at the front.
-- **Safe on shared machines.** A job starts only when the memory it asked for is really free right now, so other users' programs never push the machine into swap. A job held back says so.
+- **Safe on shared machines.** A job starts only when the memory it asked for is really free right now, so on a machine shared with other users a job waits rather than starting into swap. A job held back says so.
 - **Hard limits.** RAM and CPU are enforced by the kernel through cgroups where it can, and by a watch and kill fallback where it cannot. A job is killed at its maximum runtime, so a hang never holds the machine.
 - **Fair by default.** With no bids it is plain first in, first out. Agents can bid for urgency from a small budget, and every job gains priority as it waits, so nothing starves.
 - **Private per session.** An agent sees its own jobs, positions, bids and projected start and finish. It never sees anyone else's.
