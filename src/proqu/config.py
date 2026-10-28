@@ -14,9 +14,17 @@ from proqu.units import format_duration, format_size, parse_duration, parse_size
 
 DEFAULTS = {"bid_budget": 11000, "aging_per_minute": 10.0, "kill_grace": 10}
 
+# What an unset reserve means, as shown by `proqu config show`.
+RESERVE_DEFAULTS = {
+    "reserve_ram": "10% of the machine",
+    "reserve_cpus": "1 on machines with 4 or more CPUs, else 0",
+}
+
 DESCRIPTIONS = {
     "ram": "RAM jobs may use in total, for example 12G",
     "cpus": "CPU cores jobs may use in total",
+    "reserve_ram": "RAM kept back from jobs for services and interactive work, 0 for none",
+    "reserve_cpus": "CPU cores kept back from jobs for services and interactive work, 0 for none",
     "gpus": "GPU indices jobs may use, for example 0,1, or none",
     "vram": "GPU memory jobs may use on each GPU, for example 20G",
     "bid_budget": "bid points each session may spend",
@@ -57,7 +65,7 @@ def _valid(key: str, value) -> bool:
     whole = isinstance(value, int) and not isinstance(value, bool)
     if key in ("ram", "vram", "cpus", "kill_grace"):
         return whole and value >= 1
-    if key == "bid_budget":
+    if key in ("bid_budget", "reserve_ram", "reserve_cpus"):
         return whole and value >= 0
     if key == "gpus":
         return isinstance(value, list) and all(
@@ -110,6 +118,20 @@ def _parse(key: str, text: str, machine: Machine):
                 f"ram can only be lowered: this machine has {format_size(machine.ram)}"
             )
         return value
+    if key == "reserve_ram":
+        value = 0 if text.strip() == "0" else parse_size(text)
+        if value >= machine.ram:
+            raise ValueError(
+                f"reserve_ram must be less than the {format_size(machine.ram)} this machine has"
+            )
+        return value
+    if key == "reserve_cpus":
+        value = _int(key, text)
+        if not 0 <= value < len(machine.cpu_ids):
+            raise ValueError(
+                f"reserve_cpus must be between 0 and {len(machine.cpu_ids) - 1} on this machine"
+            )
+        return value
     if key == "cpus":
         value = _int(key, text)
         if not 1 <= value <= len(machine.cpu_ids):
@@ -158,10 +180,25 @@ def _int(key: str, text: str) -> int:
     return int(text.strip())
 
 
-def effective_limits(machine: Machine, config: dict) -> Machine:
-    """The machine as jobs see it after configured limits are applied."""
-    ram = min(machine.ram, config.get("ram", machine.ram))
-    cpu_ids = machine.cpu_ids[: config.get("cpus", len(machine.cpu_ids))]
+def reserve(machine: Machine, config: dict) -> tuple[int, int]:
+    """RAM bytes and CPU cores kept back from jobs, never enough to leave nothing."""
+    cpus = len(machine.cpu_ids)
+    ram = config.get("reserve_ram", machine.ram // 10)
+    held = config.get("reserve_cpus", 1 if cpus >= 4 else 0)
+    return min(ram, machine.ram - 1), min(held, cpus - 1)
+
+
+def effective_limits(machine: Machine, config: dict, reserved: bool = True) -> Machine:
+    """The machine as jobs see it: minus the reserve, then lowered by configured limits.
+
+    With reserved False the reserve is left out, which shows what a request may be
+    compared with to tell a reserve refusal from a config one.
+    """
+    held_ram, held_cpus = reserve(machine, config) if reserved else (0, 0)
+    ram = min(machine.ram - held_ram, config.get("ram", machine.ram))
+    cpu_ids = machine.cpu_ids[
+        : min(len(machine.cpu_ids) - held_cpus, config.get("cpus", len(machine.cpu_ids)))
+    ]
     gpus = machine.gpus
     if "gpus" in config:
         gpus = tuple(gpu for gpu in gpus if gpu.index in config["gpus"])
@@ -172,7 +209,7 @@ def effective_limits(machine: Machine, config: dict) -> Machine:
 
 def describe(key: str, value) -> str:
     """A config value as a person would write it."""
-    if key in ("ram", "vram"):
+    if key in ("ram", "vram", "reserve_ram"):
         return format_size(value)
     if key == "kill_grace":
         return format_duration(value)

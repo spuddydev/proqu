@@ -82,8 +82,10 @@ def cmd_submit(args, command: list[str]) -> int:
     max_time = parse_flag("--max", args.max, parse_duration)
     check_name(args.name)
 
-    limits = config.effective_limits(machine.snapshot(), load_config())
-    check_request(limits, ram, args.cpus, args.gpus, vram)
+    detected, current = machine.snapshot(), load_config()
+    limits = config.effective_limits(detected, current)
+    unreserved = config.effective_limits(detected, current, reserved=False)
+    check_request(limits, unreserved, ram, args.cpus, args.gpus, vram)
     if est > max_time:
         raise invalid(
             f"--est {format_duration(est)} is longer than --max {format_duration(max_time)}: "
@@ -180,16 +182,38 @@ def check_name(name: str | None) -> None:
         raise invalid(f"--name must be 1 to {MAX_NAME} printable characters on one line")
 
 
-def check_request(limits: machine.Machine, ram: int, cpus: int, gpus: int, vram: int) -> None:
+def check_request(
+    limits: machine.Machine,
+    unreserved: machine.Machine,
+    ram: int,
+    cpus: int,
+    gpus: int,
+    vram: int,
+) -> None:
+    """Refuse a request over the queue limits. unreserved is the same without the reserve."""
     if ram > limits.ram:
-        raise invalid(
+        message = (
             f"--ram {format_size(ram)} is more than the queue allows ({format_size(limits.ram)}): "
             "lower it or split the work"
         )
+        if ram <= unreserved.ram:
+            message += (
+                f". The machine has {format_size(unreserved.ram)} but the rest is kept in "
+                "reserve for services and interactive work. Only the machine's owner should "
+                "change that, with `proqu config set reserve_ram`"
+            )
+        raise invalid(message)
     if not 1 <= cpus <= len(limits.cpu_ids):
-        raise invalid(
+        message = (
             f"--cpus {cpus} is outside what the queue allows: between 1 and {len(limits.cpu_ids)}"
         )
+        if len(limits.cpu_ids) < cpus <= len(unreserved.cpu_ids):
+            message += (
+                f". The machine has {len(unreserved.cpu_ids)} but the rest are kept in reserve "
+                "for services and interactive work. Only the machine's owner should change "
+                "that, with `proqu config set reserve_cpus`"
+            )
+        raise invalid(message)
     if gpus < 0:
         raise invalid("--gpus cannot be negative")
     if gpus and not vram:
@@ -543,9 +567,15 @@ def cmd_limits(args, command: list[str]) -> int:
     current = load_config()
     limits = config.effective_limits(detected, current)
     settings = config.settings(current)
+    held_ram, held_cpus = config.reserve(detected, current)
     print("What the queue may use on this machine:")
-    print(f"  RAM: {format_size(limits.ram)}" + _of(limits.ram, detected.ram, format_size))
-    print(f"  CPUs: {len(limits.cpu_ids)}" + _of(len(limits.cpu_ids), len(detected.cpu_ids), str))
+    print(
+        f"  RAM: {format_size(limits.ram)}" + _of(limits.ram, detected.ram, held_ram, format_size)
+    )
+    print(
+        f"  CPUs: {len(limits.cpu_ids)}"
+        + _of(len(limits.cpu_ids), len(detected.cpu_ids), held_cpus, str)
+    )
     if limits.gpus:
         for gpu in limits.gpus:
             print(f"  GPU {gpu.index}: {format_size(gpu.vram)} memory")
@@ -562,13 +592,22 @@ def cmd_limits(args, command: list[str]) -> int:
             "GPU use is watched every few seconds. For kernel enforcement of RAM and CPU the "
             "machine needs systemd for the user and linger (`loginctl enable-linger`)."
         )
+    print(
+        f"Kept in reserve for services and interactive work: {format_size(held_ram)} RAM and "
+        f"{held_cpus} CPU cores. Only the machine's owner should change it, with reserve_ram and "
+        "reserve_cpus in `proqu config`."
+    )
     print(f"Each session may bid up to {settings.bid_budget} points in total.")
     print(f"Every queued job gains {settings.aging_per_minute:g} priority points per minute.")
     return 0
 
 
-def _of(limit, total, show) -> str:
-    return f" (of {show(total)}, lowered in config)" if limit < total else ""
+def _of(limit, total, held, show) -> str:
+    if limit >= total:
+        return ""
+    if limit == total - held:
+        return f" (of {show(total)}, after the reserve)"
+    return f" (of {show(total)}, lowered in config)"
 
 
 def cmd_config(args, command: list[str]) -> int:
@@ -579,7 +618,10 @@ def cmd_config(args, command: list[str]) -> int:
         current = load_config()
         for key, description in config.DESCRIPTIONS.items():
             value = current.get(key, config.DEFAULTS.get(key))
-            shown = "machine default" if value is None else config.describe(key, value)
+            if value is None:
+                shown = config.RESERVE_DEFAULTS.get(key, "machine default")
+            else:
+                shown = config.describe(key, value)
             print(f"{key} = {shown}    # {description}")
         return 0
     if not args.key:

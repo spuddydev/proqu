@@ -123,3 +123,38 @@ def test_limits_name_the_enforcement(home, capsys, monkeypatch):
     kernel = capsys.readouterr().out
     assert "RAM and CPU are enforced by the kernel" in kernel
     assert "GPU use is watched" in kernel
+
+
+def test_limits_show_the_default_reserve(home, capsys):
+    main(["config", "unset", "reserve_ram"])
+    main(["config", "unset", "reserve_cpus"])
+    capsys.readouterr()
+    main(["limits"])
+    out = capsys.readouterr().out
+    assert "RAM: 14.4G (of 16.0G, after the reserve)" in out
+    assert "CPUs: 3 (of 4, after the reserve)" in out
+    assert "Kept in reserve for services and interactive work: 1.5G RAM and 1 CPU cores" in out
+
+
+def test_limits_show_a_zero_reserve(home, capsys):
+    main(["limits"])
+    out = capsys.readouterr().out
+    assert "RAM: 16.0G\n" in out
+    assert "work: 0B RAM and 0 CPU cores" in out
+
+
+def test_config_show_names_the_reserve_defaults(home, capsys):
+    main(["config", "unset", "reserve_ram"])
+    main(["config", "unset", "reserve_cpus"])
+    capsys.readouterr()
+    main(["config", "show"])
+    out = capsys.readouterr().out
+    assert "reserve_ram = 10% of the machine" in out
+    assert "reserve_cpus = 1 on machines with 4 or more CPUs, else 0" in out
+
+
+def test_config_show_a_set_reserve(home, capsys):
+    main(["config", "set", "reserve_ram", "2G"])
+    capsys.readouterr()
+    main(["config", "show"])
+    assert "reserve_ram = 2.0G" in capsys.readouterr().out

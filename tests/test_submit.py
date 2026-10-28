@@ -214,3 +214,50 @@ def test_submit_succeeds_when_the_queue_outlook_fails(home, capsys, monkeypatch)
     assert out.startswith("Queued job ")
     assert "Next: run `proqu wait" in out
     assert len(Store().for_session("s1")) == 2
+
+
+def reserve_on():
+    main(["config", "unset", "reserve_ram"])
+    main(["config", "unset", "reserve_cpus"])
+
+
+def test_ram_over_the_reserve_names_the_reserve(home, capsys):
+    reserve_on()
+    capsys.readouterr()
+    assert submit("--ram", "15G") == 2
+    err = capsys.readouterr().err
+    assert "more than the queue allows (14.4G)" in err
+    assert "kept in reserve" in err
+    assert "owner" in err
+    assert "reserve_ram" in err
+
+
+def test_cpus_over_the_reserve_name_the_reserve(home, capsys):
+    reserve_on()
+    capsys.readouterr()
+    assert submit("--cpus", "4") == 2
+    err = capsys.readouterr().err
+    assert "between 1 and 3" in err
+    assert "kept in reserve" in err
+    assert "reserve_cpus" in err
+
+
+def test_request_over_the_machine_does_not_blame_the_reserve(home, capsys):
+    reserve_on()
+    capsys.readouterr()
+    assert submit("--ram", "20G") == 2
+    assert submit("--cpus", "5") == 2
+    assert "reserve" not in capsys.readouterr().err
+
+
+def test_request_over_a_config_limit_does_not_blame_the_reserve(home, capsys):
+    reserve_on()
+    main(["config", "set", "ram", "4G"])
+    capsys.readouterr()
+    assert submit("--ram", "8G") == 2
+    assert "reserve" not in capsys.readouterr().err
+
+
+def test_request_inside_the_reserved_limits_is_accepted(home):
+    reserve_on()
+    assert submit("--ram", "14G", "--cpus", "3") == 0

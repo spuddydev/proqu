@@ -1,5 +1,6 @@
 """The queue end to end: real passes, real supervisors, real processes."""
 
+import json
 import os
 import subprocess
 import sys
@@ -22,6 +23,7 @@ def queue(tmp_path, monkeypatch):
     monkeypatch.delenv("PROQU_JOB_ID", raising=False)
     small = machine.Machine(ram=4 * G, cpu_ids=CPUS, gpus=())
     monkeypatch.setattr(machine, "snapshot", lambda refresh=False: small)
+    paths.config_path().write_text(json.dumps({"reserve_ram": 0, "reserve_cpus": 0}))
     yield tmp_path
     for job in Store().active():
         tick.kill_leftovers([job.id])
