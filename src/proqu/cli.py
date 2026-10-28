@@ -50,13 +50,24 @@ def own_job(store: Store, job_id: str) -> Job:
     return job
 
 
-def queue_outlook(store: Store, now: float) -> dict[str, report.Place]:
-    """Positions and projections of queued jobs, from the limits a pass would use."""
+def queue_outlook(
+    store: Store, now: float, held: dict[str, str] | None = None
+) -> dict[str, report.Place]:
+    """Positions and projections of queued jobs, from the limits a pass would use.
+
+    held is what the pass just run held back for free memory.
+    """
     current = load_config()
     limits = ticking.to_limits(config.effective_limits(machine.snapshot(), current))
     settings = config.settings(current)
     return report.outlook(
-        store, current_session(), limits, settings.aging_per_minute, settings.length_delay_cap, now
+        store,
+        current_session(),
+        limits,
+        settings.aging_per_minute,
+        settings.length_delay_cap,
+        now,
+        held,
     )
 
 
@@ -140,7 +151,7 @@ def cmd_submit(args, command: list[str]) -> int:
         store.insert(job)
         if job.bid:
             store.add_bid_spent(session, job.bid)
-    run_pass(store)
+    held = run_pass(store)
     now = own_job(store, job.id)
 
     label = f" ({job.name})" if job.name else ""
@@ -161,7 +172,7 @@ def cmd_submit(args, command: list[str]) -> int:
         # the job is queued already, so a failed estimate must not fail the submit
         with contextlib.suppress(ProquError, OSError, sqlite3.Error):
             when = time.time()
-            place = queue_outlook(store, when).get(job.id)
+            place = queue_outlook(store, when, held).get(job.id)
             if place:
                 print(f"{sentence(report.describe_place(place, when))}.")
     print(
@@ -278,23 +289,27 @@ def check_dependencies(store: Store, session: str, after: list[str]) -> list[str
 RECENT_FINISHED = 10
 
 
-def run_pass(store: Store) -> None:
-    """Move the queue on. A failed pass is only a warning, the command's own change stands."""
+def run_pass(store: Store) -> dict[str, str]:
+    """Move the queue on, returning the jobs held back for free memory.
+
+    A failed pass is only a warning, the command's own change stands.
+    """
     try:
-        ticking.tick(store)
+        return ticking.tick(store) or {}
     except (LockTimeout, StoreError, OSError, sqlite3.Error) as error:
         print(
             f"proqu: warning: the queue could not be moved on just now ({error})", file=sys.stderr
         )
+        return {}
 
 
 def cmd_status(args, command: list[str]) -> int:
     store = Store()
-    run_pass(store)
+    held = run_pass(store)
     session = current_session()
     now = time.time()
     # built before printing, so a broken config fails before any output
-    places = queue_outlook(store, now)
+    places = queue_outlook(store, now, held)
     budget = config.settings(load_config()).bid_budget
     if args.id:
         print("\n".join(job_details(own_job(store, args.id), now, places)))
@@ -471,9 +486,10 @@ def wait_for(store: Store, job_id: str, timeout: float | None) -> int:
     began = time.monotonic()
     next_tick = began
     first = True
+    held: dict[str, str] = {}
     while True:
         if time.monotonic() >= next_tick:
-            quiet_tick(store)
+            held = quiet_tick(store)
             next_tick = time.monotonic() + WAIT_TICK
         job = own_job(store, job_id)
         if job.state in TERMINAL:
@@ -491,7 +507,7 @@ def wait_for(store: Store, job_id: str, timeout: float | None) -> int:
                 return CONFIG_BROKEN
         if first and job.state == "queued":
             now = time.time()
-            place = queue_outlook(store, now).get(job.id)
+            place = queue_outlook(store, now, held).get(job.id)
             if place:
                 print(f"Job {job.id} is queued, {report.describe_place(place, now)}.", flush=True)
         first = False
@@ -519,10 +535,14 @@ def report_end(store: Store, job: Job) -> int:
     return 0 if job.state == "succeeded" else 1
 
 
-def quiet_tick(store: Store) -> None:
-    """A scheduling pass that never ends the wait: a busy queue just means try later."""
+def quiet_tick(store: Store) -> dict[str, str]:
+    """A scheduling pass that never ends the wait: a busy queue just means try later.
+
+    Returns the jobs held back for free memory, empty when the pass failed.
+    """
     with contextlib.suppress(LockTimeout, sqlite3.Error):
-        ticking.tick(store)
+        return ticking.tick(store) or {}
+    return {}
 
 
 def remove_waiter(job_id: str, pid: int) -> None:

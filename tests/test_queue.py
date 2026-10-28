@@ -404,6 +404,17 @@ def test_job_waits_while_other_programs_use_the_memory(queue, monkeypatch):
     assert settle([job.id])[0].state == "succeeded"
 
 
+def test_status_and_submit_say_a_job_waits_for_memory(queue, monkeypatch, capsys):
+    monkeypatch.setattr(machine, "free_ram", lambda: G // 2)
+    job = submit(command=("true",))
+    assert "waiting for memory other programs are using" in capsys.readouterr().out
+    assert main(["status"]) == 0
+    out = capsys.readouterr().out
+    assert f"{job.id}: queued" in out
+    assert "waiting for memory other programs are using" in out
+    assert "uncertain" in out
+
+
 def test_running_jobs_keep_the_memory_they_may_still_use(queue, monkeypatch):
     # the sleeping job uses almost none of its 2G, but may grow into all of it
     first = submit("--ram", "2G", command=("sleep", "30"))
