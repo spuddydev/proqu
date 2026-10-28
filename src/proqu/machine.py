@@ -8,12 +8,13 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from proqu import paths
+from proqu import darwin, paths
 
 # how long a detected machine is trusted before it is detected again
 SNAPSHOT_AGE = 3600
@@ -47,10 +48,30 @@ class Machine:
 
 def detect(previous: Machine | None = None) -> Machine:
     """Detect the machine. A failed GPU query keeps the previous GPU list."""
+    if _macos():
+        cpu_ids = tuple(range(darwin.cpu_count()))
+        return Machine(ram=darwin.total_ram(), cpu_ids=cpu_ids, gpus=apple_gpus())
     gpus = detect_gpus()
     if gpus is None:
         gpus = previous.gpus if previous else ()
     return Machine(ram=detect_ram(), cpu_ids=detect_cpus(), gpus=gpus)
+
+
+def _macos() -> bool:
+    return sys.platform == "darwin"
+
+
+def available_cpus() -> set[int]:
+    """The CPU ids this process may run on now. macOS cannot pin, so that is every CPU."""
+    if hasattr(os, "sched_getaffinity"):
+        return os.sched_getaffinity(0)
+    return set(range(darwin.cpu_count()))
+
+
+def gpu_vendor(seen: Machine | None = None) -> str | None:
+    """The vendor of a machine's GPUs, by default the cached snapshot's, or None without any."""
+    seen = seen or cached()
+    return seen.gpus[0].vendor if seen and seen.gpus else None
 
 
 def snapshot(refresh: bool = False) -> Machine:
@@ -131,11 +152,16 @@ def detect_ram(proc: Path = Path("/proc"), cgroup_root: Path = Path("/sys/fs/cgr
     return min(total, limit) if limit else total
 
 
-def free_ram(proc: Path = Path("/proc")) -> int | None:
+def free_ram(proc: Path | None = None) -> int | None:
     """Memory the kernel could give new work now, MemAvailable, or None if it cannot be read.
 
-    Read fresh on every call, never cached, as it changes from moment to moment.
+    Read fresh on every call, never cached, as it changes from moment to moment. On
+    macOS, which has no MemAvailable, it is an estimate from the free and reusable pages.
     """
+    if proc is None:
+        if _macos():
+            return darwin.free_ram()
+        proc = Path("/proc")
     try:
         for line in (proc / "meminfo").read_text().splitlines():
             if line.startswith("MemAvailable:"):

@@ -651,7 +651,16 @@ def cmd_limits(args, command: list[str]) -> int:
                 )
     else:
         print("  GPUs: none")
-    if limits_module.cgroups_available():
+    if sys.platform == "darwin":
+        print(
+            "RAM is enforced by watching each job four times a second, counting the memory "
+            "footprint of all its processes, GPU memory included. macOS cannot pin a job to "
+            "CPUs, so its --cpus is counted for scheduling but a job may use more: run it with "
+            "that many threads. The Mac is kept awake while a job runs, as sleep would pause "
+            "the job but not its max runtime clock. A job without --gpus is trusted not to use "
+            "the GPU."
+        )
+    elif limits_module.cgroups_available():
         print(
             "RAM and CPU are enforced by the kernel: each job runs in its own cgroup. "
             "GPU use is watched every few seconds."

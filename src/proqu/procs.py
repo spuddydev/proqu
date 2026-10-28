@@ -1,6 +1,16 @@
-"""Small helpers for checking on processes by pid without trusting reused pids."""
+"""Small helpers for checking on processes by pid without trusting reused pids.
+
+Linux reads /proc. macOS has no /proc and asks the kernel through darwin instead.
+"""
 
 import os
+import sys
+
+from proqu import darwin
+
+
+def _macos() -> bool:
+    return sys.platform == "darwin"
 
 
 def _stat_fields(pid: int) -> list[str] | None:
@@ -17,8 +27,11 @@ def start_ticks(pid: int) -> int | None:
     """The process start time in clock ticks since boot, or None if it is gone.
 
     A pid can be reused once its process ends, so a pid is only trusted
-    together with the start time recorded when it was first seen.
+    together with the start time recorded when it was first seen. On macOS it
+    is the start in whole seconds since the epoch instead.
     """
+    if _macos():
+        return darwin.start_time(pid)
     fields = _stat_fields(pid)
     return int(fields[19]) if fields else None
 
@@ -30,6 +43,9 @@ def is_alive(pid: int | None, ticks: int | None) -> bool:
     """
     if pid is None or ticks is None:
         return False
+    if _macos():
+        found = darwin.process(pid)
+        return found is not None and not found[2] and found[1] == ticks
     fields = _stat_fields(pid)
     return bool(fields) and fields[0] not in ("Z", "X") and int(fields[19]) == ticks
 
@@ -44,6 +60,8 @@ def current() -> tuple[int, int]:
 
 def boot_id() -> str:
     """An id that changes on every boot, so pids from before a restart are never trusted."""
+    if _macos():
+        return darwin.boot_id()
     try:
         with open("/proc/sys/kernel/random/boot_id") as handle:
             return handle.read().strip()
@@ -52,6 +70,11 @@ def boot_id() -> str:
 
 
 def session_of(pid: int) -> int | None:
+    if _macos():
+        try:
+            return os.getsid(pid)
+        except OSError:
+            return None
     fields = _stat_fields(pid)
     return int(fields[3]) if fields else None
 
@@ -73,6 +96,8 @@ def members_of(jobs: dict[str, int | None]) -> dict[str, list[int]]:
     if not jobs:
         return found
     uid = os.getuid()
+    if _macos():
+        return _members_on_macos(markers, sessions, found, uid)
     for name in os.listdir("/proc"):
         if not name.isdigit():
             continue
@@ -93,4 +118,21 @@ def members_of(jobs: dict[str, int | None]) -> dict[str, list[int]]:
                 found[owner].append(pid)
         except OSError:
             continue
+    return found
+
+
+def _members_on_macos(
+    markers: dict[bytes, str], sessions: dict[int, str], found: dict[str, list[int]], uid: int
+) -> dict[str, list[int]]:
+    """members_of on macOS, asking the kernel for each process instead of reading /proc."""
+    for pid in darwin.pids():
+        process = darwin.process(pid)
+        if process is None or process[0] != uid or process[2]:
+            continue
+        owner = sessions.get(session_of(pid) or -1)
+        if owner is None:
+            entries = darwin.environ(pid) or []
+            owner = next((markers[e] for e in entries if e in markers), None)
+        if owner is not None:
+            found[owner].append(pid)
     return found

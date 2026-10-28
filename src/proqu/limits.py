@@ -7,6 +7,9 @@ These limits stop mistakes, not deliberate evasion. A job can escape them, for
 example by running setsid with an empty environment so the process list no
 longer finds it, by calling systemd-run itself to leave its scope, or in watch
 mode by filling tmpfs shared memory that is not counted as its own.
+
+macOS has no cgroups, so there a job is always watched. Its RAM is the memory
+footprint of its processes, which also holds what they put on the GPU.
 """
 
 import contextlib
@@ -16,11 +19,12 @@ import resource
 import shutil
 import signal
 import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
 
-from proqu import paths, procs
+from proqu import darwin, machine, paths, procs
 from proqu.store import Job
 from proqu.units import format_size
 
@@ -56,7 +60,12 @@ class Monitor:
         self.session = session
         self.gpu_uuids = gpu_uuids
         self.peak = 0
-        self.watch_gpus = shutil.which("nvidia-smi") is not None
+        self.vendor = machine.gpu_vendor()
+        # a GPU that uses the RAM shows its memory in the RAM, and cannot be told apart per job
+        if self.vendor == "apple":
+            self.watch_gpus = False
+        else:
+            self.watch_gpus = shutil.which("nvidia-smi") is not None
         self.next_gpu_check = time.monotonic()
         self.gpu_query_failed = False
         self.gpu_wait = GPU_EVERY
@@ -92,13 +101,17 @@ class Monitor:
     def finish(self, code: int | None = None) -> tuple[str, str] | None:
         """Evidence found only once the job has ended, given its exit code."""
         # a short job can start and end between two samples, the kernel remembers its peak
-        largest = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024
+        # in KiB on Linux and in bytes on macOS
+        scale = 1 if sys.platform == "darwin" else 1024
+        largest = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * scale
         self.peak = max(self.peak, largest)
         return None
 
 
 def gpu_breach(
-    job: Job, assigned: tuple[str, ...], apps: list[tuple[int, str, int | None]]
+    job: Job,
+    assigned: tuple[str, ...],
+    apps: list[tuple[int, str, int | None]],
 ) -> tuple[str, str] | None:
     """Why the job's GPU use breaks its request, given its processes on GPUs."""
     if not apps:
@@ -127,6 +140,9 @@ def gpu_breach(
 
 def gpu_apps() -> list[tuple[int, str, int | None]] | None:
     """Processes using GPUs as (pid, GPU uuid, bytes), or None if the query failed."""
+    if machine.gpu_vendor() == "apple":
+        # no process can be seen using it, its memory is counted in the RAM
+        return []
     try:
         result = subprocess.run(
             [
@@ -152,7 +168,13 @@ def gpu_apps() -> list[tuple[int, str, int | None]] | None:
 
 
 def memory_of(pid: int) -> int:
-    """Proportional memory of a process, so shared pages are not counted twice."""
+    """Proportional memory of a process, so shared pages are not counted twice.
+
+    macOS has no proportional count, so there it is the memory footprint, in which
+    pages shared between a job's processes are counted for each of them.
+    """
+    if sys.platform == "darwin":
+        return darwin.footprint(pid)
     try:
         with open(f"/proc/{pid}/smaps_rollup") as handle:
             for line in handle:
@@ -251,8 +273,10 @@ def cgroups_available() -> bool:
     """Whether jobs can be put in their own kernel enforced cgroup.
 
     Needs systemd-run for the user, a delegated memory controller, and linger,
-    because without linger the user's scopes die at the last logout.
+    because without linger the user's scopes die at the last logout. macOS has none.
     """
+    if sys.platform == "darwin":
+        return False
     key = f"{os.getuid()}:{procs.boot_id()}:{os.environ.get('XDG_RUNTIME_DIR', '')}"
     path = paths.state_dir() / "cgroups.json"
     try:
