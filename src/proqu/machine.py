@@ -15,6 +15,8 @@ from proqu import paths
 
 # how long a detected machine is trusted before it is detected again
 SNAPSHOT_AGE = 3600
+# the free GPU memory is read while the queue is locked, so it may not take long
+FREE_VRAM_WAIT = 5
 
 
 @dataclass(frozen=True)
@@ -267,7 +269,7 @@ def free_vram() -> dict[int, int] | None:
             ["nvidia-smi", "--query-gpu=index,memory.free", "--format=csv,noheader,nounits"],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=FREE_VRAM_WAIT,
             check=True,
         )
     except (OSError, subprocess.SubprocessError):
