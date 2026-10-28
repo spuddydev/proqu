@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import time
 
@@ -198,3 +199,16 @@ def test_scope_limit_rounded_up_to_a_page_counts_as_applied(home, tmp_path):
     monitor = limits.CgroupMonitor(job, 1, tmp_path)
     monitor.finish()
     assert monitor.enforced
+
+
+def test_peak_of_a_job_shorter_than_one_poll_is_recorded(home):
+    code = "x = bytearray(80 * 1024 * 1024)\nx[::4096] = b'a' * len(x[::4096])\n"
+    job = starting_job([sys.executable, "-c", code], ram=500 * M)
+    # a fresh process, so the peak of earlier test jobs is not inherited
+    subprocess.run(
+        [sys.executable, "-c", f"from proqu.runner import supervise; supervise('{job.id}')"],
+        check=True,
+    )
+    done = ended(job)
+    assert done.state == "succeeded"
+    assert 80 * M < done.peak_ram < 500 * M

@@ -6,6 +6,7 @@ with the reason the job must be stopped, or None while it is within limits.
 
 import json
 import os
+import resource
 import shutil
 import signal
 import subprocess
@@ -71,6 +72,9 @@ class Monitor:
 
     def finish(self, code: int | None = None) -> tuple[str, str] | None:
         """Evidence found only once the job has ended, given its exit code."""
+        # a short job can start and end between two samples, the kernel remembers its peak
+        largest = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss * 1024
+        self.peak = max(self.peak, largest)
         return None
 
 
