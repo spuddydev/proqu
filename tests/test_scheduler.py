@@ -10,6 +10,7 @@ from proqu.scheduler import (
     Queued,
     Request,
     Running,
+    Share,
     Start,
     order,
     plan,
@@ -659,3 +660,81 @@ def test_gpu_chosen_by_free_memory_must_still_leave_room_for_the_reserved_job():
     p = free_run(two, running, queued, Free(60 * G, {0: 0, 1: 14 * G}))
     assert started(p) == []
     assert p.held == {}
+
+
+# The share long jobs may hold
+
+DAY = 86_400
+SHARE = Share(12 * 3600, 75)
+
+
+def share_run(limits, running, queued, share=SHARE, now=NOW):
+    return plan(limits, running, queued, {}, now, 10, share=share)
+
+
+def test_long_jobs_together_hold_at_most_the_share():
+    # 8G and 8 cores, so long jobs may hold 6G and 6 cores
+    running = [r("old", ram=4, mx=DAY, cpu_ids=(0,))]
+    assert started(share_run(L8, running, [q("long", ram=3, mx=DAY)])) == []
+    assert started(share_run(L8, running, [q("long", ram=2, mx=DAY)])) == ["long"]
+
+
+def test_short_jobs_ignore_the_share():
+    running = [r("old", ram=4, mx=DAY, cpu_ids=(0,))]
+    assert started(share_run(L8, running, [q("short", ram=3, mx=3600)])) == ["short"]
+
+
+def test_cores_count_against_the_share():
+    running = [r("old", mx=DAY, cpu_ids=(0, 1, 2, 3, 4))]
+    assert started(share_run(L8, running, [q("long", mx=DAY, cpus=2)])) == []
+    assert started(share_run(L8, running, [q("long", mx=DAY, cpus=1)])) == ["long"]
+
+
+def test_gpu_memory_counts_against_the_share_on_each_gpu():
+    # GPU 0 has 24G, so long jobs may hold 18G of it
+    running = [r("old", mx=DAY, gpu_ids=(0,), vram=12)]
+    one = Limits(64 * G, tuple(range(8)), (Gpu(0, "u0", 24 * G),))
+    assert started(share_run(one, running, [q("long", mx=DAY, gpus=1, vram=8)])) == []
+    assert started(share_run(one, running, [q("long", mx=DAY, gpus=1, vram=6)])) == ["long"]
+
+
+def test_a_long_job_larger_than_the_share_runs_alone():
+    assert started(share_run(L8, [], [q("huge", ram=8, mx=DAY, cpus=8)])) == ["huge"]
+    running = [r("old", ram=1, mx=DAY)]
+    assert started(share_run(L8, running, [q("huge", ram=7, mx=DAY, cpus=7)])) == []
+
+
+def test_a_long_job_larger_than_the_share_keeps_other_long_jobs_out():
+    running = [r("huge", ram=7, mx=DAY, cpu_ids=(0,))]
+    assert started(share_run(L8, running, [q("long", ram=1, mx=DAY)])) == []
+    assert started(share_run(L8, running, [q("short", ram=1, mx=60)])) == ["short"]
+
+
+def test_long_job_blocked_by_the_share_is_reserved_for_when_a_long_job_ends():
+    # long jobs may hold 6 of the 8 cores, old holds 1, so long must wait for old to end
+    running = [r("old", mx=DAY, cpu_ids=(0,))]
+    queued = [q("long", cpus=6, mx=DAY, t=1), q("filler", cpus=2, mx=2 * DAY, t=2)]
+    # filler fits the share now, but would take the share long needs once old ends
+    assert started(share_run(L8, running, queued)) == []
+    # one that ends before old does may still go ahead
+    queued[1] = q("filler", cpus=2, mx=DAY - 1, t=2)
+    assert started(share_run(L8, running, queued)) == ["filler"]
+
+
+def test_projection_accounts_for_the_share():
+    running = [r("old", ram=4, est=3600, mx=DAY, cpu_ids=(0,))]
+    out = project(L8, running, [q("long", ram=3, mx=DAY)], {}, NOW, 10, share=SHARE)
+    assert out["long"].start == NOW + 3600
+    assert project(L8, running, [q("long", ram=3, mx=DAY)], {}, NOW, 10)["long"].start == NOW
+
+
+def test_full_share_changes_nothing():
+    running = [r("old", ram=4, mx=DAY, cpu_ids=(0,))]
+    queued = [q("long", ram=4, mx=DAY)]
+    assert started(share_run(L8, running, queued, share=Share(12 * 3600, 100))) == ["long"]
+
+
+def test_a_job_at_the_threshold_is_not_long():
+    running = [r("old", ram=4, mx=DAY, cpu_ids=(0,))]
+    queued = [q("edge", ram=3, mx=12 * 3600)]
+    assert started(share_run(L8, running, queued)) == ["edge"]
