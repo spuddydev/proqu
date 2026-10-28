@@ -138,6 +138,7 @@ def test_the_mac_is_kept_awake_while_a_job_runs(tmp_path, monkeypatch):
     (bin_dir / "caffeinate").write_text(f'#!/bin/sh\necho "$@" > {record}\n')
     (bin_dir / "caffeinate").chmod(0o755)
     monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    monkeypatch.setattr(sys, "platform", "linux")
     runner.keep_awake(4242)
     time.sleep(0.2)
     assert not record.exists()
