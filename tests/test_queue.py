@@ -389,3 +389,48 @@ def test_a_queued_job_failed_by_a_config_limit_keeps_the_old_wording(queue, monk
     main(["config", "set", "ram", "2G"])
     real()
     assert "lowered after it was submitted" in Store().get(job.id).reason
+
+
+# Free memory
+
+
+def test_job_waits_while_other_programs_use_the_memory(queue, monkeypatch):
+    monkeypatch.setattr(machine, "free_ram", lambda: G // 2)
+    job = submit(command=("true",))
+    assert Store().get(job.id).state == "queued"
+    assert tick.tick() == {job.id: "ram"}
+    monkeypatch.setattr(machine, "free_ram", lambda: 3 * G)
+    assert tick.tick() == {}
+    assert settle([job.id])[0].state == "succeeded"
+
+
+def test_running_jobs_keep_the_memory_they_may_still_use(queue, monkeypatch):
+    # the sleeping job uses almost none of its 2G, but may grow into all of it
+    first = submit("--ram", "2G", command=("sleep", "30"))
+    monkeypatch.setattr(machine, "free_ram", lambda: 2 * G + G // 2)
+    second = submit(command=("true",))
+    assert Store().get(second.id).state == "queued"
+    assert tick.tick() == {second.id: "ram"}
+    main(["cancel", first.id])
+    settle([first.id])
+
+
+def test_passes_inside_a_job_never_read_free_memory(queue, monkeypatch):
+    def unread():
+        raise AssertionError("free memory read inside a job")
+
+    monkeypatch.setattr(machine, "free_ram", unread)
+    monkeypatch.setenv("PROQU_JOB_ID", "outer1")
+    submit(command=("true",))
+
+
+def test_hook_passes_never_start_gpu_jobs(queue, monkeypatch):
+    gpu = machine.Machine(ram=4 * G, cpu_ids=CPUS, gpus=(machine.GpuInfo(0, "GPU-a", 8 * G),))
+    monkeypatch.setattr(machine, "snapshot", lambda refresh=False: gpu)
+    monkeypatch.setattr(machine, "cached", lambda: gpu)
+    monkeypatch.setattr(machine, "free_vram", lambda: {0: 8 * G})
+    monkeypatch.setenv("PROQU_JOB_ID", "outer1")
+    job = submit("--gpus", "1", "--vram", "1G", command=("true",))
+    monkeypatch.delenv("PROQU_JOB_ID")
+    assert tick.tick(cached_only=True) == {job.id: "gpu-unread"}
+    assert Store().get(job.id).state == "queued"
