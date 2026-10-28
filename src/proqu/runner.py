@@ -7,6 +7,7 @@ how it ended and then lets the queue move on.
 
 import contextlib
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -98,12 +99,11 @@ def _supervise(store: Store, job_id: str) -> None:
     with open(paths.log_path(job_id), "ab") as log:
         try:
             _check_cpus(job)
-            proc = launch(job, log)
+            proc, monitor = start(job, log)
         except (OSError, subprocess.SubprocessError, ValueError) as error:
             with store.locked():
                 _end_unstarted(store, job, "failed", f"could not start: {_describe(error)}")
             return
-    monitor = limits.Monitor(job, proc.pid)
     outcome = None
     running = False
     try:
@@ -117,8 +117,9 @@ def _supervise(store: Store, job_id: str) -> None:
         # whatever went wrong above, the job must not outlive its supervisor
         stop_members(job_id, proc.pid, settings.kill_grace)
         code = _reap(proc)
+        evidence = monitor.finish(code)
     if running:
-        state, reason = outcome or monitor.finish() or classify(code)
+        state, reason = outcome or evidence or classify(code)
         _finish(store, job_id, state, reason, code, monitor.peak)
 
 
@@ -143,8 +144,44 @@ def _reap(proc: subprocess.Popen) -> int | None:
         return None
 
 
-def launch(job: Job, log) -> subprocess.Popen:
-    """Start the job's command in its own session, pinned to its CPUs."""
+def start(job: Job, log) -> tuple[subprocess.Popen, limits.Monitor]:
+    """Launch the job with the strongest enforcement this machine offers."""
+    _check_runnable(job)
+    if limits.cgroups_available():
+        marker = paths.state_dir() / "logs" / f"{job.id}.started"
+        proc = launch(job, log, limits.scope_command(job, marker))
+        started, scope = limits.await_scope(proc, marker)
+        marker.unlink(missing_ok=True)
+        if started:
+            if scope is None:
+                return proc, limits.Monitor(job, proc.pid)
+            return proc, limits.CgroupMonitor(job, proc.pid, scope)
+        # the scope was never made, so the job never ran and can run without it
+        with contextlib.suppress(OSError):
+            proc.kill()
+        proc.wait()
+        limits.mark_unavailable()
+    proc = launch(job, log, job.argv)
+    return proc, limits.Monitor(job, proc.pid)
+
+
+def _check_runnable(job: Job) -> None:
+    """Fail early and plainly when the command cannot run at all.
+
+    Inside a scope the shell step would only report exit code 127.
+    """
+    if not os.path.isdir(job.cwd):
+        raise FileNotFoundError(2, "No such directory", job.cwd)
+    program = job.argv[0]
+    if "/" in program:
+        if not os.access(os.path.join(job.cwd, program), os.X_OK):
+            raise FileNotFoundError(2, "No such file or directory", program)
+    elif not shutil.which(program, path=job.env.get("PATH", "")):
+        raise FileNotFoundError(2, "No such file or directory", program)
+
+
+def launch(job: Job, log, argv: list[str]) -> subprocess.Popen:
+    """Start a command for the job in its own session, pinned to its CPUs."""
     env = dict(job.env)
     env["PROQU_JOB_ID"] = job.id
     uuids = {gpu.index: gpu.uuid for gpu in machine.snapshot().gpus}
@@ -155,8 +192,10 @@ def launch(job: Job, log) -> subprocess.Popen:
         if cpu_ids:
             os.sched_setaffinity(0, cpu_ids)
 
+    if argv is not job.argv:
+        env = limits.scope_env(env)
     return subprocess.Popen(
-        job.argv,
+        argv,
         cwd=job.cwd,
         env=env,
         stdin=subprocess.DEVNULL,

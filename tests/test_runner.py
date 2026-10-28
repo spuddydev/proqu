@@ -267,7 +267,7 @@ def test_first_writer_wins_over_the_supervisor(home):
 
 
 def test_supervisor_error_still_stops_the_job(home, monkeypatch):
-    def broken(store, job, proc):
+    def broken(*args):
         raise RuntimeError("supervisor bug")
 
     monkeypatch.setattr(runner, "watch", broken)
