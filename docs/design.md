@@ -127,12 +127,13 @@ A session is the unit of visibility, bidding and notification.
 
 - Under Claude Code the SessionStart hook sets `PROQU_SESSION` to the Claude Code session id.
 - Outside Claude Code every caller shares the session `default`, so they all see and can cancel each other's jobs.
+- The owner has no view across sessions. `status --all` covers only the caller's session. To see or stop an agent's jobs the owner reads the database for the session id and runs the command with `PROQU_SESSION` set to it. The guide shows how.
 - `/clear` or forking a session gives a new session id. The new session cannot see the earlier one's jobs, bids or budget. Jobs from the earlier session keep running and finish. Nobody is woken for them.
 - A subagent shares its parent's session and can see the same jobs. A background `proqu wait` started by a subagent ends when the subagent does. The parent must run its own wait for any job it needs to hear about. The Stop hook then reminds it if a job is unwatched.
 
 ## Notifications
 
-The agent hears about a finished job through a background `proqu wait`. The hooks are a safety net. SessionStart, Prompt and Stop report any outcome the wait did not, and each outcome is reported once. Each is worded like the end of a wait, with what to do next and the command for the log. The Stop hook blocks the agent from finishing while a job is unwatched, so a job is not left to run with nobody told. It lists the exact wait and cancel commands for each such job.
+The agent hears about a finished job through a background `proqu wait`. The hooks are a safety net. SessionStart, Prompt and Stop report any outcome the wait did not, and each outcome is reported once. Each says what happened, what to do next and the command for the log. A `proqu wait` on a job that already ended prints the outcome again. The Stop hook blocks the agent from finishing while a job is unwatched, and lists the exact wait and cancel commands for each such job. It blocks once. Claude Code sets `stop_hook_active` on the retry, and the hook then lets the agent stop. So a job can still be left unwatched if the agent ignores the reminder.
 
 A hook ends itself after 8 seconds, inside the 10 second timeout the plugin sets. If the environment file is missing, SessionStart cannot export the session id. It shows the id instead, and says to put it in front of every command.
 
