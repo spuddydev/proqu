@@ -1,0 +1,7 @@
+[
+  {
+    "name": "proqu",
+    "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/proqu\" watch",
+    "description": "proqu job outcomes for this session"
+  }
+]
