@@ -23,6 +23,8 @@ def queue(tmp_path, monkeypatch):
     monkeypatch.delenv("PROQU_JOB_ID", raising=False)
     small = machine.Machine(ram=4 * G, cpu_ids=CPUS, gpus=())
     monkeypatch.setattr(machine, "snapshot", lambda refresh=False: small)
+    # the host's free memory varies from runner to runner, the tests that need it set it
+    monkeypatch.setattr(machine, "free_ram", lambda: None)
     paths.config_path().write_text(json.dumps({"reserve_ram": 0, "reserve_cpus": 0}))
     yield tmp_path
     for job in Store().active():
