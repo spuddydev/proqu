@@ -299,3 +299,39 @@ def test_a_dependency_cycle_is_neither_started_nor_projected():
 def test_empty_queue():
     assert run(L8, [], []).start == []
     assert proj(L8, [], []) == {}
+
+
+# Bids and aging through plan and project
+
+OLD_AND_BIDDING = [q("old", 8, t=NOW - 100 * 60), q("rich", 8, t=NOW, bid=500)]
+
+
+def test_a_later_bid_starts_first():
+    queue = [q("early", 8, t=1), q("rich", 8, t=2, bid=100)]
+    assert started(run(L8, [], queue)) == ["rich"]
+
+
+def test_a_later_bid_is_projected_first():
+    queue = [q("early", 8, t=1, est=60), q("rich", 8, t=2, bid=100, est=30)]
+    assert proj(L8, [], queue) == {"rich": (1, 0, 30), "early": (2, 30, 90)}
+
+
+def test_plan_uses_the_aging_rate_it_is_given():
+    # 100 minutes of waiting is worth 1000 at rate 10 and nothing at rate 0.
+    assert started(plan(L8, [], OLD_AND_BIDDING, {}, NOW, 10)) == ["old"]
+    assert started(plan(L8, [], OLD_AND_BIDDING, {}, NOW, 0)) == ["rich"]
+
+
+def test_project_uses_the_aging_rate_it_is_given():
+    aged = project(L8, [], OLD_AND_BIDDING, {}, NOW, 10)
+    flat = project(L8, [], OLD_AND_BIDDING, {}, NOW, 0)
+    assert (aged["old"].position, aged["rich"].position) == (1, 2)
+    assert (flat["old"].position, flat["rich"].position) == (2, 1)
+    assert aged["old"].start == NOW
+    assert flat["rich"].start == NOW
+
+
+def test_order_uses_the_aging_rate_it_is_given():
+    assert ids(order(OLD_AND_BIDDING, 0)) == ["rich", "old"]
+    assert ids(order(OLD_AND_BIDDING, 10)) == ["old", "rich"]
+    assert ids(order(OLD_AND_BIDDING, 20)) == ["old", "rich"]
