@@ -12,6 +12,8 @@ proqu is a queue for heavy jobs. Agents submit a job with what it needs. proqu s
 - [Kill reasons](#kill-reasons)
 - [Hooks](#hooks)
 - [Config](#config)
+- [For the owner](#for-the-owner)
+- [Outside Claude Code](#outside-claude-code)
 - [Where things live](#where-things-live)
 
 ## Quick start
@@ -362,7 +364,29 @@ A `ram`, `cpus`, `gpus` or `vram` above what the machine has is refused, and so 
 
 If the config file is broken, commands report it and the queue waits for a fix. `proqu config unset KEY` removes a bad value.
 
-## Where things live
+## For the owner
+
+The owner is the person who owns the machine. They need `proqu` on their own PATH. The plugin only gives it to the agent, so see the README for how to link it.
+
+Each session sees only its own jobs, and `proqu status --all` covers only the caller's session. There is no command to list sessions or see everything. The owner can still look and act:
+
+- List every job and its session by reading `proqu.db` in the state directory, for example with Python's `sqlite3` module. The `jobs` table has `id`, `session` and `state`.
+- Then run any command as that session, for example `PROQU_SESSION=SESSION proqu cancel ID`.
+- Or end the processes directly. The supervisor notices and the next command tidies the queue.
+
+An owner running `proqu` without `PROQU_SESSION` uses the shared `default` session and sees none of this.
+
+## Outside Claude Code
+
+There is no skill, so there are no hooks and no reminders. A person or another agent should read `skills/proqu/SKILL.md` in the repository. The essential rules are:
+
+- Queue only heavy work, such as training, large builds and long simulations. Never queue services or quick tasks.
+- Measure RAM and cores honestly before submitting, for example with `/usr/bin/time -v`. Use `nvidia-smi` for GPU memory.
+- Set `--max` to 1.5 to 3 times `--est`.
+- Run `proqu wait ID` so you hear when the job ends. It must stay running, for example in a background process. It exits 0 only if the job succeeded.
+- Set `PROQU_SESSION` to a name of your own, or everyone shares `default`.
+- Read the outcome. A kill is the job's fault and says what to change.
+- Do not change the config.
 
 State is per user. The directory is, in order:
 
