@@ -215,3 +215,18 @@ def test_a_failed_scheduling_pass_does_not_end_the_wait(home, monkeypatch, error
     monkeypatch.setattr(cli, "WAIT_TICK", 0.0)
     monkeypatch.setattr(cli.ticking, "tick", refuse)
     assert cli.wait_for(Store(), job.id, 0.2) == cli.TIMED_OUT
+
+
+def test_wait_never_sleeps_past_its_timeout(home, monkeypatch):
+    job = submit()
+    sleeps = []
+    real = time.sleep
+
+    def sleep(seconds):
+        sleeps.append(seconds)
+        real(seconds)
+
+    monkeypatch.setattr(cli, "WAIT_POLL", 5.0)
+    monkeypatch.setattr(cli.time, "sleep", sleep)
+    assert cli.wait_for(Store(), job.id, 0.2) == cli.TIMED_OUT
+    assert sleeps and max(sleeps) <= 0.2
