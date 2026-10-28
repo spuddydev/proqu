@@ -96,7 +96,7 @@ Do not blindly resubmit with bigger numbers. Diagnose first from the log and the
 
 The default is no bid, and that is almost always right. With no bids the queue is first come first served, except that a long job counts as submitted later, by a tenth of its `--max` and at most 4 hours (by default). So a job with a modest `--max` tends to go ahead of a long job submitted a little earlier, but a long job that has waited long enough still goes first. Small jobs also fill the gaps around large ones.
 
-Jobs with a `--max` over 12 hours are long. Long jobs together get at most 75% of the machine, so a long job may wait for another long job to end. Do not understate `--max` to dodge this, because the job is killed when it reaches it.
+Jobs with a `--max` over 12 hours (by default) are long. Long jobs together get at most 75% of what the queue may use (by default), so a long job may wait for another long job to end. Do not understate `--max` to dodge this, because the job is killed when it reaches it.
 
 Each session has a small bid budget (11000 by default) that is spent at submit. Every queued job gains 10 priority points per minute (by default), so a bid only buys a head start over jobs that were waiting before it.
 

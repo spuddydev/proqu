@@ -204,9 +204,9 @@ A job held back by this stays queued. It never fails for it. Other programs usin
 
 A job whose `--max` is over 12 hours is long. Long jobs together may hold at most 75% of the queue's RAM, of its cores and of each GPU's memory. The caps are the limits times the percent, rounded down. With few cores the core cap is small. Two cores at 75% gives 1, so long jobs then run one at a time.
 
-Short jobs are not affected. A long job blocked by the share waits for another long job to end. It is reserved for that time and status projects its start then. A single long job larger than the share still runs, but only when no other long job is running, and no other long job starts meanwhile.
+Short jobs are not affected. A long job blocked by the share waits for another long job to end. It is reserved for that time and status projects its start then. A single long job larger than the share, in RAM, cores or any GPU's memory, still runs, but only when no other long job is running, and no other long job starts meanwhile.
 
-The owner can change this with `long_job_after` and `long_job_share`. `proqu limits` shows both. Changing `long_job_after` reclassifies running jobs at the next pass. It does not stop them. This is separate from the length delay under [Priority](#priority), which only reorders the queue. A queued long job is told at submit that it may wait.
+The owner can change this with `long_job_after` and `long_job_share`. `proqu limits` shows both. Changing `long_job_after` reclassifies running jobs at the next pass. It does not stop them. This is separate from the length delay under [Priority](#priority), which only reorders the queue. While the share is below 100%, a queued long job is told at submit that it may wait.
 
 ### Backfill and the reservation
 
