@@ -55,3 +55,7 @@ def config_path() -> Path:
 
 def log_path(job_id: str) -> Path:
     return state_dir() / "logs" / f"{job_id}.log"
+
+
+def supervisor_log_path(job_id: str) -> Path:
+    return state_dir() / "logs" / f"{job_id}.proqu.log"
