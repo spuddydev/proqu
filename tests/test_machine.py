@@ -1,12 +1,15 @@
 import json
 import multiprocessing
 import os
+import sys
 import time
 
 import pytest
 
 from proqu import machine, paths
 
+# detection on macOS takes its own path, tested with the macOS queries
+LINUX_DETECTION = pytest.mark.skipif(sys.platform == "darwin", reason="Linux detection")
 # macOS has no CPU affinity, so there the CPUs are counted rather than read from it
 AFFINITY = pytest.mark.skipif(
     not hasattr(os, "sched_getaffinity"), reason="needs CPU affinity, Linux only"
@@ -116,6 +119,7 @@ def test_gpus_when_nvidia_smi_missing(tmp_path, monkeypatch):
     assert machine.detect_gpus() == ()
 
 
+@LINUX_DETECTION
 def test_failed_gpu_query_keeps_previous_gpus(tmp_path, monkeypatch):
     fake_nvidia_smi(tmp_path, monkeypatch, "exit 9")
     previous = machine.Machine(1, (0,), (machine.GpuInfo(0, "GPU-aaa", 1024**3),))
@@ -217,6 +221,7 @@ def test_cpu_quota_trims_a_known_cpu_set(tmp_path, monkeypatch):
     assert machine.detect_cpus(proc, root) == (0, 1, 2)
 
 
+@LINUX_DETECTION
 def test_absent_nvidia_smi_clears_previous_gpus(tmp_path, monkeypatch):
     monkeypatch.setenv("PATH", str(tmp_path))
     previous = machine.Machine(1, (0,), (machine.GpuInfo(0, "GPU-aaa", 1024**3),))
