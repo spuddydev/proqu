@@ -408,3 +408,12 @@ def test_set_long_job_after():
 def test_long_job_settings_read_as_a_person_would_write_them():
     assert config.describe("long_job_after", 12 * 3600) == "12h"
     assert config.describe("long_job_share", 75) == "75%"
+
+
+def test_zero_long_job_after_in_the_file_is_refused(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text('{"long_job_after": 0}')
+    with pytest.raises(ValueError, match="long_job_after"):
+        config.load(path)
+    path.write_text('{"long_job_after": 3600}')
+    assert config.load(path) == {"long_job_after": 3600}

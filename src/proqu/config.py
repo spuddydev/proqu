@@ -89,7 +89,9 @@ def _valid(key: str, value) -> bool:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return False
     try:
-        return math.isfinite(value) and value >= 0
+        # set refuses a zero long_job_after, as it would make every job long
+        least = value > 0 if key == "long_job_after" else value >= 0
+        return math.isfinite(value) and least
     except OverflowError:
         return False
 
