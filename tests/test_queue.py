@@ -1,11 +1,13 @@
 """The queue end to end: real passes, real supervisors, real processes."""
 
 import os
+import subprocess
+import sys
 import time
 
 import pytest
 
-from proqu import machine, procs, tick
+from proqu import cli, machine, paths, procs, tick
 from proqu.cli import main
 from proqu.store import Store
 
@@ -173,3 +175,117 @@ def test_failed_pass_does_not_fail_the_submit(queue, capsys, monkeypatch):
     request = ["submit", "--ram", "1G", "--cpus", "1", "--est", "2s", "--max", "30s"]
     assert main([*request, "--", "true"]) == 0
     assert "could not be moved on just now" in capsys.readouterr().err
+
+
+# waiting and logs
+
+
+@pytest.fixture
+def quick(monkeypatch):
+    monkeypatch.setattr(cli, "WAIT_POLL", 0.2)
+
+
+def waiter_for(job_id, timeout=30):
+    """Start `proqu wait` in its own process and return it once it is registered."""
+    machine._save(paths.machine_path(), machine.snapshot())
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "proqu", "wait", job_id],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if [pid for pid, _ in Store().waiters(job_id)] == [proc.pid]:
+            return proc
+        assert proc.poll() is None, proc.communicate()
+        time.sleep(0.1)
+    proc.kill()
+    raise AssertionError("wait never registered itself")
+
+
+def test_wait_reports_a_succeeded_job(queue, quick, capsys):
+    job = submit("--name", "hi", command=("sh", "-c", "echo hello; sleep 0.5"))
+    capsys.readouterr()
+    assert main(["wait", job.id]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith(f"Job {job.id} (hi) succeeded after ")
+    assert "Exit code 0" in out
+    assert out.endswith(f"(full log: `proqu logs {job.id}`):\nhello\n")
+    assert Store().get(job.id).notified
+
+
+def test_wait_reports_a_failed_job(queue, quick, capsys):
+    job = submit(command=("sh", "-c", "echo oops; exit 4"))
+    capsys.readouterr()
+    assert main(["wait", job.id]) == 1
+    out = capsys.readouterr().out
+    assert ": exited with code 4\n" in out
+    assert "Next: read the log" in out
+    assert out.endswith("oops\n")
+
+
+def test_wait_on_a_queued_job_that_then_runs(queue, quick, capsys):
+    submit("--ram", "3G", command=("sleep", "2"))
+    second = submit("--ram", "2G", command=("echo", "done"))
+    assert Store().get(second.id).state == "queued"
+    capsys.readouterr()
+    assert main(["wait", second.id]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith(f"Job {second.id} is queued, position 1 in the queue, expected to start")
+    assert f"Job {second.id} succeeded after " in out
+    assert out.endswith("done\n")
+
+
+def test_waiter_is_registered_while_waiting_and_removed_after(queue):
+    job = submit(command=("sleep", "3"))
+    proc = waiter_for(job.id)
+    out, _ = proc.communicate(timeout=60)
+    assert proc.returncode == 0
+    assert f"Job {job.id} succeeded after " in out
+    assert Store().waiters(job.id) == []
+
+
+def test_terminated_wait_removes_its_waiter(queue):
+    job = submit(command=("sleep", "30"))
+    proc = waiter_for(job.id)
+    proc.terminate()
+    out, _ = proc.communicate(timeout=30)
+    assert proc.returncode == 143
+    assert f"Stopped waiting for job {job.id} before it ended." in out
+    assert Store().waiters(job.id) == []
+    assert Store().get(job.id).state in ("starting", "running")
+
+
+def test_wait_times_out_while_the_job_runs(queue, quick, capsys):
+    job = submit(command=("sleep", "30"))
+    capsys.readouterr()
+    assert main(["wait", job.id, "--timeout", "1s"]) == 3
+    out = capsys.readouterr().out
+    assert f"job {job.id} is still " in out
+    assert Store().waiters(job.id) == []
+    assert not Store().get(job.id).notified
+
+
+def test_another_session_cannot_wait_or_read_logs(queue, capsys, monkeypatch):
+    job = submit(command=("sh", "-c", "echo private"))
+    settle([job.id])
+    monkeypatch.setenv("PROQU_SESSION", "s2")
+    capsys.readouterr()
+    assert main(["wait", job.id]) == 1
+    assert main(["logs", job.id]) == 1
+    captured = capsys.readouterr()
+    assert captured.err.count(f"no job {job.id} in this session") == 2
+    assert "private" not in captured.out
+    assert not Store().get(job.id).notified
+
+
+def test_logs_of_a_finished_job(queue, capsys):
+    job = submit(command=("seq", "1", "300"))
+    settle([job.id])
+    capsys.readouterr()
+    assert main(["logs", job.id, "--tail", "3"]) == 0
+    assert capsys.readouterr().out == "298\n299\n300\n"
+    assert main(["logs", job.id]) == 0
+    lines = capsys.readouterr().out.splitlines()
+    assert (len(lines), lines[0]) == (200, "101")
