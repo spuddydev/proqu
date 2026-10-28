@@ -1,4 +1,6 @@
+import multiprocessing
 import os
+import time
 
 from proqu import machine
 
@@ -129,3 +131,48 @@ def test_snapshot_never_refreshes_inside_a_job(tmp_path, monkeypatch):
     monkeypatch.setenv("PROQU_JOB_ID", "abc123")
     monkeypatch.setattr(machine, "detect", lambda previous=None: 1 / 0)
     assert machine.snapshot(refresh=True) == first
+
+
+def test_snapshot_inside_a_job_without_cache_is_not_saved(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path / "state"))
+    monkeypatch.setenv("PROQU_JOB_ID", "abc123")
+    machine.snapshot()
+    assert not (tmp_path / "state" / "machine.json").exists()
+
+
+def test_snapshot_expires(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("PROQU_JOB_ID", raising=False)
+    first = machine.snapshot()
+    old = time.time() - machine.SNAPSHOT_AGE - 10
+    os.utime(tmp_path / "state" / "machine.json", (old, old))
+    seen = []
+    monkeypatch.setattr(machine, "detect", lambda previous=None: seen.append(previous) or first)
+    machine.snapshot()
+    assert seen == [first]
+
+
+def test_corrupt_snapshot_is_detected_again(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROQU_HOME", str(tmp_path / "state"))
+    monkeypatch.delenv("PROQU_JOB_ID", raising=False)
+    (tmp_path / "state").mkdir()
+    (tmp_path / "state" / "machine.json").write_text("{torn")
+    assert machine.snapshot() == machine.detect()
+
+
+def _refresh_many(home, count):
+    os.environ["PROQU_HOME"] = home
+    os.environ.pop("PROQU_JOB_ID", None)
+    for _ in range(count):
+        machine.snapshot(refresh=True)
+
+
+def test_concurrent_snapshots_do_not_crash(tmp_path):
+    ctx = multiprocessing.get_context("spawn")
+    workers = [ctx.Process(target=_refresh_many, args=(str(tmp_path), 50)) for _ in range(6)]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+        assert worker.exitcode == 0
+    assert not list(tmp_path.glob("*.tmp"))

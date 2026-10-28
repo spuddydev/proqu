@@ -1,10 +1,12 @@
 """Detection of the resources this machine offers to jobs."""
 
+import contextlib
 import json
 import math
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -46,13 +48,34 @@ def snapshot(refresh: bool = False) -> Machine:
     path = paths.machine_path()
     cached = _load(path)
     in_job = bool(os.environ.get("PROQU_JOB_ID"))
-    if cached and (in_job or (not refresh and time.time() - path.stat().st_mtime < SNAPSHOT_AGE)):
+    if cached and (in_job or (not refresh and _age(path) < SNAPSHOT_AGE)):
         return cached
     machine = detect(cached)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps(asdict(machine)))
-    os.replace(tmp, path)
+    if not in_job:
+        _save(path, machine)
     return machine
+
+
+def _age(path: Path) -> float:
+    try:
+        return time.time() - path.stat().st_mtime
+    except OSError:
+        return float("inf")
+
+
+def _save(path: Path, machine: Machine) -> None:
+    """Write the snapshot atomically. Failing to cache it is not an error."""
+    try:
+        handle, tmp = tempfile.mkstemp(dir=path.parent, prefix="machine.", suffix=".tmp")
+    except OSError:
+        return
+    try:
+        with os.fdopen(handle, "w") as out:
+            out.write(json.dumps(asdict(machine)))
+        os.replace(tmp, path)
+    except OSError:
+        with contextlib.suppress(OSError):
+            os.unlink(tmp)
 
 
 def _load(path: Path) -> Machine | None:
