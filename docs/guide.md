@@ -29,7 +29,7 @@ Run `proqu wait` as a background command so the agent is woken when the job ends
 
 ## Commands
 
-Every command acts on the current session only. A job from another session reads as "no job in this session". See [Hooks](#hooks) for how the session is chosen.
+Every command acts on the current session only. Exit code 2 means the command line was invalid. An unknown job id gives 1 for `status`, `cancel` and `logs`, and so does cancelling a finished job. `wait` has its own table. A job from another session reads as "no job in this session". See [Hooks](#hooks) for how the session is chosen.
 
 ### submit
 
@@ -37,7 +37,7 @@ Every command acts on the current session only. A job from another session reads
 proqu submit --ram SIZE --cpus N --est TIME --max TIME [options] -- COMMAND ARGS
 ```
 
-The command goes after `--` and is run directly, with no shell. For pipes, redirects or `&&` use `-- bash -c '...'`. The working directory and environment are captured at submit, so activate virtualenvs and export variables first.
+The command goes after `--` and is run directly, with no shell. For pipes, redirects or `&&` use `-- bash -c '...'`. The working directory and environment are captured at submit, so activate virtualenvs and export variables first. The whole environment is stored with the job. See [Where things live](#where-things-live).
 
 | Flag | Meaning |
 | --- | --- |
@@ -109,7 +109,7 @@ Exit codes:
 | 141 | The reader of its output went away (SIGPIPE). |
 | 143 | The wait was stopped with SIGTERM. |
 
-After 3, 4, 129, 130, 141 or 143 the job has not ended and the wait should be run again. A wait that stops early prints how to start it again. The job is not affected.
+After 3, 4, 129, 130, 141 or 143 the job has not ended and the wait should be run again. A wait that stops early prints how to start it again. The job is not affected. A wait on a job that has already ended prints its outcome again, so running it twice is safe.
 
 ### logs
 
