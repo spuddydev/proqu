@@ -119,3 +119,72 @@ def test_probe_result_is_cached(home, monkeypatch):
     limits.mark_unavailable()
     assert not limits.cgroups_available()
     assert calls == [1]
+
+
+def fake_nvidia_smi(tmp_path, monkeypatch, line):
+    """A nvidia-smi that reports the job's shell, whose pid it reads from a file."""
+    bin_dir = tmp_path / "gpu-bin"
+    bin_dir.mkdir()
+    pid_file = tmp_path / "pid"
+    script = bin_dir / "nvidia-smi"
+    script.write_text(f'#!/bin/sh\n[ -f {pid_file} ] && echo "$(cat {pid_file}), {line}"\nexit 0\n')
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    monkeypatch.setattr(limits, "GPU_EVERY", 0.2)
+    return ["sh", "-c", f"echo $$ > {pid_file}; sleep 30"]
+
+
+def test_gpu_use_without_a_request_is_killed(home, tmp_path, monkeypatch):
+    command = fake_nvidia_smi(tmp_path, monkeypatch, "GPU-a, 500")
+    job = starting_job(command)
+    runner.supervise(job.id)
+    done = ended(job)
+    assert done.state == "killed"
+    assert done.reason.startswith("used a GPU without asking for one")
+
+
+def test_use_of_a_gpu_not_given_is_killed(home, tmp_path, monkeypatch):
+    command = fake_nvidia_smi(tmp_path, monkeypatch, "GPU-b, 500")
+    job = starting_job(command, gpus=1, vram=1024**3, gpu_ids=[0])
+    runner.supervise(job.id)
+    assert ended(job).reason.startswith("used GPU GPU-b, which was not given to it")
+
+
+def test_gpu_memory_over_the_request_is_killed(home, tmp_path, monkeypatch):
+    command = fake_nvidia_smi(tmp_path, monkeypatch, "GPU-a, 2048")
+    job = starting_job(command, gpus=1, vram=1024**3, gpu_ids=[0])
+    runner.supervise(job.id)
+    assert ended(job).reason.startswith("used 2.0G of GPU memory, more than its --vram of 1.0G")
+
+
+def test_gpu_use_within_the_request_is_fine(home, tmp_path, monkeypatch):
+    fake_nvidia_smi(tmp_path, monkeypatch, "GPU-a, 512")
+    pid_file = tmp_path / "pid"
+    job = starting_job(
+        ["sh", "-c", f"echo $$ > {pid_file}; sleep 1.5"], gpus=1, vram=1024**3, gpu_ids=[0]
+    )
+    runner.supervise(job.id)
+    assert ended(job).state == "succeeded"
+
+
+def test_gpu_apps_parsing(tmp_path, monkeypatch):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    script = bin_dir / "nvidia-smi"
+    script.write_text("#!/bin/sh\necho '12, GPU-a, 100'\necho '13, GPU-b, [N/A]'\necho junk\n")
+    script.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+    assert limits.gpu_apps() == [(12, "GPU-a", 100 * M), (13, "GPU-b", None)]
+
+
+def test_failing_gpu_query_is_ignored(home, tmp_path, monkeypatch, capsys):
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "nvidia-smi").write_text("#!/bin/sh\nexit 9\n")
+    (bin_dir / "nvidia-smi").chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    monkeypatch.setattr(limits, "GPU_EVERY", 0.2)
+    job = starting_job(["sleep", "1.5"])
+    runner.supervise(job.id)
+    assert ended(job).state == "succeeded"
+    assert capsys.readouterr().out.count("could not query GPU use") == 1

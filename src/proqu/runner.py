@@ -147,6 +147,7 @@ def _reap(proc: subprocess.Popen) -> int | None:
 def start(job: Job, log) -> tuple[subprocess.Popen, limits.Monitor]:
     """Launch the job with the strongest enforcement this machine offers."""
     _check_runnable(job)
+    uuids = gpu_uuids(job)
     if limits.cgroups_available():
         marker = paths.state_dir() / "logs" / f"{job.id}.started"
         proc = launch(job, log, limits.scope_command(job, marker))
@@ -154,15 +155,21 @@ def start(job: Job, log) -> tuple[subprocess.Popen, limits.Monitor]:
         marker.unlink(missing_ok=True)
         if started:
             if scope is None:
-                return proc, limits.Monitor(job, proc.pid)
-            return proc, limits.CgroupMonitor(job, proc.pid, scope)
+                return proc, limits.Monitor(job, proc.pid, uuids)
+            return proc, limits.CgroupMonitor(job, proc.pid, scope, uuids)
         # the scope was never made, so the job never ran and can run without it
         with contextlib.suppress(OSError):
             proc.kill()
         proc.wait()
         limits.mark_unavailable()
     proc = launch(job, log, job.argv)
-    return proc, limits.Monitor(job, proc.pid)
+    return proc, limits.Monitor(job, proc.pid, uuids)
+
+
+def gpu_uuids(job: Job) -> tuple[str, ...]:
+    """The uuids of the GPUs assigned to the job."""
+    known = {gpu.index: gpu.uuid for gpu in machine.snapshot().gpus}
+    return tuple(known.get(index, str(index)) for index in job.gpu_ids)
 
 
 def _check_runnable(job: Job) -> None:
@@ -184,8 +191,7 @@ def launch(job: Job, log, argv: list[str]) -> subprocess.Popen:
     """Start a command for the job in its own session, pinned to its CPUs."""
     env = dict(job.env)
     env["PROQU_JOB_ID"] = job.id
-    uuids = {gpu.index: gpu.uuid for gpu in machine.snapshot().gpus}
-    env["CUDA_VISIBLE_DEVICES"] = ",".join(uuids.get(i, str(i)) for i in job.gpu_ids)
+    env["CUDA_VISIBLE_DEVICES"] = ",".join(gpu_uuids(job))
     cpu_ids = set(job.cpu_ids)
 
     def pin() -> None:

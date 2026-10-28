@@ -21,6 +21,8 @@ from proqu.units import format_size
 PROBE_AGE = 86400
 # how long systemd-run may take to put a job in its scope
 SCOPE_WAIT = 5.0
+# how often GPU use is checked, nvidia-smi is too slow to run every poll
+GPU_EVERY = 5.0
 
 OWN_LIMIT = "this was the job's own limit"
 
@@ -33,23 +35,97 @@ def ram_reason(limit: int, peak: int) -> str:
 
 
 class Monitor:
-    """Watches RAM by summing the memory of every process in the job."""
+    """Watches RAM by summing the memory of every process in the job, and GPU use."""
 
-    def __init__(self, job: Job, session: int):
+    def __init__(self, job: Job, session: int, gpu_uuids: tuple[str, ...] = ()):
         self.job = job
         self.session = session
+        self.gpu_uuids = gpu_uuids
         self.peak = 0
+        self.watch_gpus = shutil.which("nvidia-smi") is not None
+        self.next_gpu_check = time.monotonic()
+        self.gpu_query_failed = False
 
     def check(self) -> tuple[str, str] | None:
+        return self.check_ram() or self.check_gpus()
+
+    def check_ram(self) -> tuple[str, str] | None:
         used = sum(memory_of(pid) for pid in procs.job_members(self.job.id, self.session))
         self.peak = max(self.peak, used)
         if used > self.job.ram:
             return "killed", ram_reason(self.job.ram, used)
         return None
 
+    def check_gpus(self) -> tuple[str, str] | None:
+        if not self.watch_gpus or time.monotonic() < self.next_gpu_check:
+            return None
+        self.next_gpu_check = time.monotonic() + GPU_EVERY
+        apps = gpu_apps()
+        if apps is None:
+            if not self.gpu_query_failed:
+                print("proqu: could not query GPU use, GPU limits are not checked", flush=True)
+            self.gpu_query_failed = True
+            return None
+        members = set(procs.job_members(self.job.id, self.session))
+        return gpu_breach(self.job, self.gpu_uuids, [app for app in apps if app[0] in members])
+
     def finish(self, code: int | None = None) -> tuple[str, str] | None:
         """Evidence found only once the job has ended, given its exit code."""
         return None
+
+
+def gpu_breach(
+    job: Job, assigned: tuple[str, ...], apps: list[tuple[int, str, int | None]]
+) -> tuple[str, str] | None:
+    """Why the job's GPU use breaks its request, given its processes on GPUs."""
+    if not apps:
+        return None
+    if not job.gpus:
+        return "killed", (
+            f"used a GPU without asking for one: {OWN_LIMIT}, "
+            "resubmit with --gpus and --vram if it needs a GPU"
+        )
+    used: dict[str, int] = {}
+    for _, uuid, memory in apps:
+        if uuid not in assigned:
+            return "killed", (
+                f"used GPU {uuid}, which was not given to it: {OWN_LIMIT}, "
+                "use the GPUs in CUDA_VISIBLE_DEVICES only"
+            )
+        used[uuid] = used.get(uuid, 0) + (memory or 0)
+    worst = max(used.values())
+    if worst > job.vram:
+        return "killed", (
+            f"used {format_size(worst)} of GPU memory, more than its --vram of "
+            f"{format_size(job.vram)}: {OWN_LIMIT}, measure it with nvidia-smi and resubmit"
+        )
+    return None
+
+
+def gpu_apps() -> list[tuple[int, str, int | None]] | None:
+    """Processes using GPUs as (pid, GPU uuid, bytes), or None if the query failed."""
+    try:
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-compute-apps=pid,gpu_uuid,used_memory",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    apps = []
+    for line in result.stdout.splitlines():
+        fields = [field.strip() for field in line.split(",")]
+        if len(fields) != 3 or not fields[0].isdigit():
+            continue
+        memory = int(fields[2]) * 1024**2 if fields[2].isdigit() else None
+        apps.append((int(fields[0]), fields[1], memory))
+    return apps
 
 
 def memory_of(pid: int) -> int:
@@ -81,8 +157,8 @@ class CgroupMonitor(Monitor):
 
     SAMPLE = 0.02
 
-    def __init__(self, job: Job, session: int, path: Path):
-        super().__init__(job, session)
+    def __init__(self, job: Job, session: int, path: Path, gpu_uuids: tuple[str, ...] = ()):
+        super().__init__(job, session, gpu_uuids)
         self.path = path
         self.oom_kills = 0
         # if the limit was not applied, fall back to watching
@@ -91,8 +167,8 @@ class CgroupMonitor(Monitor):
         self._thread = threading.Thread(target=self._sample_until_stopped, daemon=True)
         self._thread.start()
 
-    def check(self) -> tuple[str, str] | None:
-        return None if self.enforced else super().check()
+    def check_ram(self) -> tuple[str, str] | None:
+        return None if self.enforced else super().check_ram()
 
     def _sample_until_stopped(self) -> None:
         while not self._stop.wait(self.SAMPLE):
