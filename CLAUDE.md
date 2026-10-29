@@ -6,7 +6,7 @@ A shared compute queue that lets coding agents submit heavy jobs and share a mac
 
 ### Purpose
 
-- Coding agents (Claude Code first) queue compute heavy jobs such as model training, large builds and long simulations. Many agents share one machine without overloading it.
+- Coding agents (Claude Code first) queue medium and heavy compute jobs, such as slow test suites, full builds, data processing, model training and long simulations. Many agents share one machine without overloading it.
 - The only real user is an agent. Every interface, message and error is written for an agent to act on.
 - General use and open source. Nothing is tied to one machine, user or path. Limits are detected at run time.
 
@@ -45,7 +45,7 @@ A shared compute queue that lets coding agents submit heavy jobs and share a mac
 
 - Linux and macOS. macOS limits are watched, not enforced by the kernel.
 - NVIDIA and AMD GPUs on Linux, and the Apple silicon GPU as one slot. AMD is untested on hardware.
-- Not for small or quick tasks. The skill says so with examples.
+- Not for menial tasks such as small helpers or quick checks. Anything over about two minutes may be queued. On a quiet machine it does not matter, on a busy one the queue is respected. The skill says so with examples.
 - Services and multi-week jobs never go through proqu.
 
 ## Layout
