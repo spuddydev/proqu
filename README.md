@@ -164,13 +164,15 @@ Next: the job broke its own limit, not the queue's. Find out why from the log be
 
 ## What belongs in the queue
 
+Anything likely to run for more than about two minutes, or that needs a GPU, can go through the queue. On a quiet machine a queued job starts straight away. On a busy one the queue decides who goes first.
+
 | Queue it | Run it directly |
 | --- | --- |
-| Training or fine tuning a model | Quick scripts and one off checks |
-| Inference over a large dataset | Unit tests, linting, formatting |
-| A kernel, LLVM or full release build | git, package installs, small builds |
-| Long simulations and benchmarks | Dev servers, databases, file watchers |
-| Hyperparameter sweeps | Anything meant to run for weeks |
+| A test suite that takes minutes | Small helper scripts and one off checks |
+| A full build, a kernel or LLVM | Quick tests, linting, formatting |
+| Data processing over a sizeable dataset | git, package installs, small builds |
+| Training, fine tuning or inference | Dev servers, databases, file watchers |
+| Simulations, benchmarks and sweeps | Anything meant to run for weeks |
 
 Services never go through the queue. A slot would be held for as long as the service lives. The queue keeps a reserve of RAM and a core back for them.
 

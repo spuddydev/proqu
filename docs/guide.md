@@ -160,7 +160,7 @@ The skill tells agents never to queue:
 - services, such as dev servers, databases, file watchers or bots. They would hold a slot as long as they live and be killed at their max runtime
 - multi-week jobs
 
-Quick or light work does not belong in the queue either. A multi-day training run does.
+Menial work such as small helper scripts, quick tests and linting does not belong in the queue either. Medium work does, not only models and extreme compute. The skill draws the line at about two minutes of runtime, or any GPU use. On a quiet machine a borderline job may run either way. On a busy one agents submit it and wait their turn. A multi-day training run is a normal queue job.
 
 ## Scheduling
 
@@ -454,7 +454,7 @@ An owner running `proqu` without `PROQU_SESSION` uses the shared `default` sessi
 
 There is no skill, so there are no hooks and no reminders. A person or another agent should read `skills/proqu/SKILL.md` in the repository. The essential rules are:
 
-- Queue only heavy work, such as training, large builds and long simulations. Never queue services or quick tasks.
+- Queue medium and heavy work, roughly anything over two minutes or needing a GPU, such as slow test suites, full builds, data processing and training. Never queue services or menial tasks.
 - Measure RAM and cores honestly before submitting, for example with `/usr/bin/time -v` on Linux, or Activity Monitor or `footprint` on macOS. Use `nvidia-smi` for NVIDIA GPU memory and `amd-smi` or `rocm-smi` for AMD.
 - Set `--max` to 1.5 to 3 times `--est`.
 - Run `proqu wait ID` so you hear when the job ends. It must stay running, for example in a background process. It exits 0 only if the job succeeded.
