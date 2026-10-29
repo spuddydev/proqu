@@ -20,22 +20,6 @@ Let any number of Claude Code sessions train models, run big builds and crunch d
 
 Point three agents at one GPU box and ask each to train a model. Without help they all start at once, the machine swaps, the out of memory killer picks a victim, and nobody learns why. With proqu each agent states what its job needs, the queue packs jobs onto the machine as tightly as they fit, holds every job to its request, and wakes the agent the moment its job ends.
 
-```console
-$ proqu submit --name train --ram 6G --cpus 4 --gpus 1 --vram 10G --est 2h --max 4h -- python train.py
-Started job 782ecb (train): 6.0G RAM, 4 CPUs, 1 GPU with 10.0G each, estimated 2h, killed at 4h.
-You will be woken when it ends, nothing more to run. Check on it with `proqu status 782ecb`.
-
-# the agent carries on or goes idle, then two hours later it is woken by a notification:
-proqu: job 782ecb (train): succeeded. Next: check its output and results before relying on them. Log: `proqu logs 782ecb --tail 50`
-
-$ proqu wait 782ecb          # the same outcome in full, with the end of the log
-Job 782ecb (train) succeeded after 1h52m
-Exit code 0, peak RAM 5.1G.
-Next: check its output and results before relying on them.
-Last 1 lines of the log (whole log: `proqu logs 782ecb --tail 0`):
-epoch 40 done, val loss 0.183
-```
-
 ## Why proqu
 
 - **Built for agents, not people.** Every message, refusal and kill reason is written for an agent to act on. The bundled skill teaches the agent when to queue, how to estimate, and how to read the outcome.
@@ -193,17 +177,6 @@ Limits can only be lowered below what the machine has. Every key is in the [guid
 - [Design notes](docs/design.md): how it works inside and what it does not promise.
 - [The skill](skills/proqu/SKILL.md): what the agent reads.
 
-## Roadmap
-
-- [x] Queue, backfill, bids and dependencies
-- [x] Hard limits through cgroups, with a watch and kill fallback
-- [x] Claude Code plugin with wake on finish
-- [x] Start jobs only when memory is really free, for machines shared with other users
-- [x] A cap on the share long jobs may hold ([#7](https://github.com/spuddydev/proqu/issues/7))
-- [x] macOS ([#13](https://github.com/spuddydev/proqu/issues/13))
-- [x] AMD GPUs ([#14](https://github.com/spuddydev/proqu/issues/14))
-- [x] A job held for memory other programs use is no longer passed by later jobs for ever
-
 ## Contributing
 
 Issues and pull requests are welcome. Work lands on `dev`, which is merged into `main` for each release. To try changes in Claude Code, add your clone with `claude plugin marketplace add`. The installer leaves a plugin added that way alone.
@@ -214,7 +187,3 @@ uv run pytest                                  # test
 uv run ruff check --fix && uv run ruff format  # lint and format
 uvx pre-commit install --install-hooks         # hooks, once per clone
 ```
-
-## Licence
-
-[MIT](LICENSE)
