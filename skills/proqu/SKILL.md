@@ -1,32 +1,33 @@
 ---
 name: proqu
-description: Use before running any compute heavy job on this machine, such as training or fine tuning a model, model inference over a large dataset, a large compile (kernel, LLVM, a full release build), long simulations or benchmarks, big data processing or hyperparameter sweeps, and anything that needs a GPU or will take more than a few minutes or many GB of RAM. proqu is the shared compute queue that runs it fairly beside other agents. Covers estimating resources, submitting, waiting, reading outcomes and bids.
+description: Use before running any medium or heavy compute job on this machine, meaning anything likely to run for more than about two minutes or to need a GPU, several cores or many GB of RAM. Examples are a slow test suite, a full build, data processing, model training, fine tuning or inference, simulations, benchmarks and sweeps. Not for menial work such as small helper scripts, quick checks, linting or git. proqu is the shared compute queue that runs it fairly beside other agents. Covers estimating resources, submitting, waiting, reading outcomes and bids.
 ---
 
 # proqu: the shared compute queue
 
 This machine is shared by several agents. proqu is one queue per user that all of them use, so heavy jobs run one after another instead of fighting over memory, cores and GPUs. A job starts only when it fits the limits and the memory free right now, so it may also wait for memory that other programs are using. Every job states what it needs, and the limits are hard: a job that goes over its own request is killed.
 
-Never run heavy work outside the queue on a shared machine. It starves everyone else's jobs and can bring the machine down.
+Never run heavy work outside the queue, and on a busy machine not medium work either. It starves everyone else's jobs and can bring the machine down.
 
 ## When to use it
 
-Use proqu for work that is heavy or long:
+The queue is for medium and heavy work, not only for models and extreme compute. As a rule of thumb, anything likely to run for more than about two minutes belongs in the queue, and so does anything that needs a GPU, several cores or many GB of RAM. For example:
 
-- training or fine tuning a model
-- model inference over a large dataset
-- a large compile such as a kernel, LLVM or a full release build
-- long simulations or benchmarks
-- big data processing
+- a test suite or benchmark that takes minutes
+- a full or release build, or a large compile such as a kernel or LLVM
+- data processing, conversion or analysis over a sizeable dataset
+- training, fine tuning or model inference
+- simulations
 - hyperparameter sweeps (one job per run, or one job running the sweep)
 
-Do not use it for quick or light work. Run these directly:
+Do not use it for menial work. Run these directly:
 
-- quick scripts, tests that take seconds, linting, formatting
-- git, package installs, small builds
-- anything under about a minute that uses little memory
+- small helper scripts, one off checks and quick commands
+- tests that take seconds, linting, formatting
+- git, package installs, small incremental builds
+- anything that finishes in well under two minutes and uses little memory
 
-Use judgement between the two. A five minute build on a few cores is fine either way. Anything that needs a GPU goes through the queue.
+Use judgement near the line. If the machine is quiet, a borderline job can run either way, and a queued one starts straight away. If it is busy, respect the queue: submit the job and wait your turn rather than running it directly to skip ahead. Anything that needs a GPU always goes through the queue.
 
 Never put these through proqu:
 
